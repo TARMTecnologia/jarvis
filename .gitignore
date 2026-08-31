@@ -1,0 +1,30 @@
+# Python & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# Build & Dist
+build/
+dist/
+*.spec
+*.egg-info/
+
+# Data & Secrets
+.env
+data/jarvis.db
+data/*.db
+data/cache/
+logs/*.log
+logs/*.log.*
+
+# IDEs & System
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+.DS_Store
