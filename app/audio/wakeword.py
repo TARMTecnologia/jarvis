@@ -10,9 +10,9 @@ from app.core.logging_config import get_logger
 
 logger = get_logger("audio.wakeword")
 
-# Padrao regex com tolerancia fonetica para "Jarvis"
+# Padrao regex com ampla tolerancia fonetica para "Jarvis"
 WAKE_WORD_PATTERN = re.compile(
-    r"(?:e\s+a[ií]|ei|oi|ol[aá]|fala|por\s+favor\s+)?\b(jarvis|i[aá]rvis|jarves|jarvys|jarve|j[aá]rvis)\b",
+    r"(?:e\s+a[ií]|ei|oi|ol[aá]|fala|por\s+favor\s+)?\b(jarvis|i[aá]rvis|jarves|jarvys|jarve|j[aá]rvis|jarvi)\b",
     re.IGNORECASE
 )
 
@@ -48,24 +48,29 @@ class WakeWordDetector:
 
         # 1. Modo Continuo ou Push-to-Talk: qualquer fala e considerada valida
         if voice_mode in ("continuous", "push_to_talk"):
-            # Remove a palavra "Jarvis" se o usuario falou por habito
             cleaned = WAKE_WORD_PATTERN.sub("", clean_text).strip()
-            # Limpa virgulas ou dois pontos no inicio
             cleaned = re.sub(r"^[,.:\- ]+", "", cleaned).strip()
             return True, cleaned if cleaned else clean_text
 
-        # 2. Modo Wake Word: exige a palavra "Jarvis"
+        # 2. Modo Wake Word: exige a palavra "Jarvis" ou variacoes
         match = WAKE_WORD_PATTERN.search(clean_text)
         if match:
-            # Extrai o comando apos a palavra de ativacao
             idx_end = match.end()
             prompt = clean_text[idx_end:].strip()
             prompt = re.sub(r"^[,.:\- ]+", "", prompt).strip()
+
+            # Se o usuario apenas falou "Jarvis", responde saudacao pronta
+            if not prompt:
+                prompt = "Olá Jarvis"
 
             logger.info(f"Wake word detectada! Prompt extraido: '{prompt}'")
             return True, prompt
 
         return False, ""
+
+    def process_transcription(self, text: str) -> Tuple[bool, str]:
+        """Alias para check_wake_word para compatibilidade com AudioManager."""
+        return self.check_wake_word(text)
 
 
 wake_word_detector = WakeWordDetector()

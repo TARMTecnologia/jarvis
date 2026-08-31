@@ -1,4 +1,4 @@
-﻿"""
+"""
 Gerenciamento de configuracoes do assistente JARVIS.
 Permite personalizacao de IA, Audio, Camera, Memoria e Sistema.
 """
@@ -21,7 +21,10 @@ RECOMMENDED_MODELS = {
         "recommended": [
             "gpt-4o",
             "gpt-4o-mini",
+            "gpt-5",
+            "gpt-4.5-preview",
             "o3-mini",
+            "o1",
             "o1-mini",
             "gpt-4-turbo",
             "gpt-3.5-turbo"
