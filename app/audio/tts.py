@@ -1,111 +1,76 @@
 ﻿"""
-Sintese de Voz Local (Text-To-Speech) para o JARVIS.
-Utiliza a engine nativa SAPI5 e OneCore do Windows com suporte a vozes masculinas (Microsoft Daniel) e inicializacao COM por thread.
+Motor Hibrido de Sintese de Voz (Text-To-Speech) para o JARVIS.
+Utiliza vozes neurais de alta definicao (Edge-TTS Masculino pt-BR-Antonio / pt-BR-Fabio) com fallback offline para SAPI5.
 """
 
+import asyncio
+import io
 import threading
 import winreg
 from typing import List, Dict, Any, Optional, Callable
-import pyttsx3
+import sounddevice
+import soundfile
 import pythoncom
+import pyttsx3
 from app.core.config import app_config
 from app.core.logging_config import get_logger
 
 logger = get_logger("audio.tts")
 
-DANIEL_MALE_VOICE_TOKEN = r"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens\MSTTS_V110_ptBR_DanielM"
+DEFAULT_NEURAL_MALE_VOICE = "pt-BR-AntonioNeural"
 
 
 class LocalTTS:
-    """Motor de síntese de voz local nativo do Windows com suporte a vozes masculinas e femininas."""
+    """Motor de síntese de voz com suporte a voz neural masculina e fallback offline nativo."""
 
     def __init__(self):
         self._lock = threading.Lock()
         self._is_speaking = False
-        self._default_male_voice_id = None
-        self._discover_voices()
-
-    def _discover_voices(self) -> None:
-        """Descobre vozes SAPI5 e OneCore instaladas no Windows."""
-        voices = self.list_voices()
-        # Procura primeiro por Daniel (Masculino PT-BR)
-        for v in voices:
-            vid = v["id"].lower()
-            vname = v["name"].lower()
-            if "daniel" in vname or "daniel" in vid:
-                self._default_male_voice_id = v["id"]
-                break
-        
-        # Se não achou Daniel, procura qualquer voz masculina ou em português
-        if not self._default_male_voice_id:
-            for v in voices:
-                vname = v["name"].lower()
-                if "portuguese" in vname or "brazil" in vname:
-                    self._default_male_voice_id = v["id"]
-                    break
-
-        # Se ainda não estiver configurado no config, define o padrão
-        if not app_config.audio.tts_voice_id and self._default_male_voice_id:
-            app_config.audio.tts_voice_id = self._default_male_voice_id
-            app_config.save()
-            logger.info(f"Voz masculina padrão configurada para o JARVIS: {self._default_male_voice_id}")
+        self._stop_requested = False
+        self._current_stream = None
 
     def list_voices(self) -> List[Dict[str, Any]]:
-        """Lista todas as vozes SAPI5 e OneCore instaladas no Windows."""
-        voice_list = []
-        seen_ids = set()
+        """Lista todas as vozes neurais e nativas disponiveis."""
+        voices = [
+            {"id": "pt-BR-AntonioNeural", "name": "JARVIS Neural Masculino (Antonio - PT-BR)", "gender": "Masculino"},
+            {"id": "pt-BR-FabioNeural", "name": "JARVIS Neural Masculino (Fábio - PT-BR)", "gender": "Masculino"},
+            {"id": "pt-BR-FranciscaNeural", "name": "JARVIS Neural Feminino (Francisca - PT-BR)", "gender": "Feminino"},
+            {"id": "en-US-GuyNeural", "name": "JARVIS Neural Masculino (Guy - EN-US)", "gender": "Masculino"},
+            {"id": "en-US-ChristopherNeural", "name": "JARVIS Neural Masculino (Christopher - EN-US)", "gender": "Masculino"},
+        ]
 
-        # 1. Busca vozes OneCore no Registro do Windows
-        try:
-            k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens")
-            num_subkeys = winreg.QueryInfoKey(k)[0]
-            for i in range(num_subkeys):
-                subkey_name = winreg.EnumKey(k, i)
-                sub = winreg.OpenKey(k, subkey_name)
-                desc = winreg.QueryValue(sub, "")
-                token_id = rf"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens\{subkey_name}"
-                gender = "Masculino" if any(x in subkey_name.lower() or x in desc.lower() for x in ["daniel", "david", "mark", "pablo", "paul", "adam", "stefan", "andrei", "pavel", "jakub", "naayf"]) else "Feminino"
-                if token_id not in seen_ids:
-                    seen_ids.add(token_id)
-                    voice_list.append({
-                        "id": token_id,
-                        "name": f"{desc} ({gender} - OneCore)",
-                        "gender": gender
-                    })
-        except Exception as e:
-            logger.debug(f"Aviso ao consultar vozes OneCore no registro: {e}")
-
-        # 2. Busca vozes SAPI5 padrão via pyttsx3
+        # Adiciona vozes locais do Windows SAPI5
         pythoncom.CoInitialize()
         try:
             engine = pyttsx3.init("sapi5")
-            sapi_voices = engine.getProperty("voices")
-            for v in sapi_voices:
-                if v.id not in seen_ids:
-                    seen_ids.add(v.id)
-                    gender = "Masculino" if "david" in v.name.lower() or "daniel" in v.name.lower() else "Feminino"
-                    voice_list.append({
-                        "id": v.id,
-                        "name": f"{v.name} ({gender})",
-                        "gender": gender
-                    })
+            for v in engine.getProperty("voices"):
+                gender = "Masculino" if "david" in v.name.lower() or "daniel" in v.name.lower() else "Feminino"
+                voices.append({
+                    "id": v.id,
+                    "name": f"{v.name} (SAPI5 Local)",
+                    "gender": gender
+                })
         except Exception as e:
             logger.debug(f"Aviso ao consultar vozes SAPI5: {e}")
         finally:
             pythoncom.CoUninitialize()
 
-        return voice_list
+        return voices
 
     def speak(self, text: str, on_start: Optional[Callable[[], None]] = None, on_end: Optional[Callable[[], None]] = None) -> None:
         """
-        Sintetiza e fala o texto com voz masculina e inicialização COM por thread.
+        Sintetiza e reproduz o texto com voz masculina.
+        Tenta primeiro síntese neural; se falhar ou offline, usa SAPI5.
         """
         clean_text = text.strip()
-        if not clean_text:
+        if not clean_text or app_config.system.silent_mode:
+            if on_end:
+                on_end()
             return
 
         with self._lock:
             self._is_speaking = True
+            self._stop_requested = False
 
         if on_start:
             try:
@@ -113,39 +78,101 @@ class LocalTTS:
             except Exception:
                 pass
 
+        selected_voice = app_config.audio.tts_voice_id or DEFAULT_NEURAL_MALE_VOICE
+        # Se o ID configurado for uma voz neural (ou padrao)
+        if "Neural" in selected_voice or "pt-BR" in selected_voice:
+            success = self._speak_neural(clean_text, selected_voice)
+            if not success and not self._stop_requested:
+                logger.info("Tentando fallback para SAPI5 local...")
+                self._speak_sapi5(clean_text)
+        else:
+            self._speak_sapi5(clean_text, selected_voice)
+
+        with self._lock:
+            self._is_speaking = False
+
+        if on_end:
+            try:
+                on_end()
+            except Exception:
+                pass
+
+    def _speak_neural(self, text: str, voice_name: str) -> bool:
+        """Sintetiza voz neural de alta definicao via Edge-TTS."""
+        try:
+            import edge_tts
+
+            async def _generate():
+                communicate = edge_tts.Communicate(text, voice_name)
+                audio_buffer = io.BytesIO()
+                async for chunk in communicate.stream():
+                    if self._stop_requested:
+                        return None
+                    if chunk["type"] == "audio":
+                        audio_buffer.write(chunk["data"])
+                audio_buffer.seek(0)
+                return audio_buffer
+
+            loop = asyncio.new_event_loop()
+            buf = loop.run_until_complete(_generate())
+            loop.close()
+
+            if buf is None or self._stop_requested:
+                return True
+
+            data, sr = soundfile.read(buf)
+            if self._stop_requested:
+                return True
+
+            # Reproduz no dispositivo de audio configurado
+            dev_idx = app_config.audio.output_device_index
+            sounddevice.play(data, samplerate=sr, device=dev_idx)
+            
+            # Aguarda termino respeitando interrupcao
+            while sounddevice.get_stream() and sounddevice.get_stream().active:
+                if self._stop_requested:
+                    sounddevice.stop()
+                    break
+                sounddevice.sleep(30)
+
+            return True
+
+        except Exception as e:
+            logger.warning(f"Sintese neural falhou ({e}). Ativando fallback SAPI5.")
+            return False
+
+    def _speak_sapi5(self, text: str, voice_id: Optional[str] = None) -> None:
+        """Fallback offline nativo via Windows SAPI5."""
         pythoncom.CoInitialize()
         try:
             engine = pyttsx3.init("sapi5")
             engine.setProperty("rate", app_config.audio.tts_rate or 190)
             engine.setProperty("volume", app_config.audio.tts_volume or 1.0)
 
-            selected_voice = app_config.audio.tts_voice_id or self._default_male_voice_id or DANIEL_MALE_VOICE_TOKEN
-            if selected_voice:
+            if voice_id and "HKEY" in voice_id:
                 try:
-                    engine.setProperty("voice", selected_voice)
-                except Exception as ve:
-                    logger.warning(f"Não foi possível aplicar a voz {selected_voice}: {ve}")
+                    engine.setProperty("voice", voice_id)
+                except Exception:
+                    pass
 
-            engine.say(clean_text)
+            engine.say(text)
             engine.runAndWait()
             engine.stop()
 
         except Exception as e:
-            logger.error(f"Erro durante síntese de voz TTS: {e}")
+            logger.error(f"Erro no fallback SAPI5: {e}")
         finally:
             pythoncom.CoUninitialize()
-            with self._lock:
-                self._is_speaking = False
-            if on_end:
-                try:
-                    on_end()
-                except Exception:
-                    pass
 
     def stop(self) -> None:
         """Interrompe a fala imediatamente."""
         with self._lock:
+            self._stop_requested = True
             self._is_speaking = False
+        try:
+            sounddevice.stop()
+        except Exception:
+            pass
 
     @property
     def is_speaking(self) -> bool:

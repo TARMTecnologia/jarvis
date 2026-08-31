@@ -1,4 +1,4 @@
-﻿"""
+"""
 Gerenciador Central de Memoria do JARVIS.
 Coordena memoria de curto prazo, longo prazo, recuperacao semantica e comandos de usuario.
 """
@@ -85,9 +85,10 @@ class MemoryManager:
         if not app_config.memory.enabled or app_config.memory.private_mode:
             return base_system_prompt
 
+        max_k = getattr(app_config.memory, "max_retrieval_count", getattr(app_config.memory, "max_retrieval_results", 5))
         retrieved_context = self.retrieval.format_context_for_prompt(
             query=user_query,
-            top_k=app_config.memory.max_retrieval_results,
+            top_k=max_k,
             threshold=app_config.memory.similarity_threshold
         )
 

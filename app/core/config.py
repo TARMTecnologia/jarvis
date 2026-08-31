@@ -115,6 +115,11 @@ class MemorySettings(BaseModel):
     consolidation_turn_interval: int = Field(default=6, ge=2, le=30, description="Turnos para consolidacao automatica")
     private_mode: bool = Field(default=False, description="Modo privado: nenhuma memoria persistente e salva")
 
+    @property
+    def max_retrieval_results(self) -> int:
+        return self.max_retrieval_count
+
+
 
 class SystemSettings(BaseModel):
     """Configuracoes gerais do sistema e interface."""

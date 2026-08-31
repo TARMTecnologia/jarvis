@@ -14,10 +14,10 @@
         "wake_word": "Jarvis",
         "vad_sensitivity": 0.5,
         "silence_threshold_ms": 800,
-        "stt_engine": "local_whisper",
+        "stt_engine": "openai_whisper",
         "stt_model_size": "base",
         "tts_engine": "sapi5",
-        "tts_voice_id": null,
+        "tts_voice_id": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Speech_OneCore\\Voices\\Tokens\\MSTTS_V110_ptBR_DanielM",
         "tts_rate": 190,
         "tts_volume": 1.0,
         "barge_in_enabled": true
