@@ -1,6 +1,6 @@
 ﻿"""
 Provedor de IA OpenAI para o JARVIS.
-Suporta modelos GPT-4o, GPT-4o-mini, o3-mini, o1, visão multimodal e function calling com fallback resiliente.
+Suporta modelos GPT-4o, GPT-4o-mini, o3-mini, o1, visão multimodal e function calling com formatação estrita de tool_calls.
 """
 
 import base64
@@ -82,12 +82,12 @@ class OpenAIProvider(AIProvider):
 
     def _build_messages(
         self,
-        prompt: str,
+        prompt: Optional[str] = None,
         images: Optional[List[bytes]] = None,
         history: Optional[List[Dict[str, Any]]] = None,
         system_prompt: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """Constroi o payload de mensagens com suporte a imagens em base64."""
+        """Constroi o payload de mensagens com suporte oficial a tool_calls e imagens."""
         messages = []
 
         if system_prompt:
@@ -96,41 +96,70 @@ class OpenAIProvider(AIProvider):
         if history:
             for turn in history:
                 role = turn.get("role", "user")
-                if role in ("user", "assistant", "system"):
-                    messages.append({"role": role, "content": turn.get("content", "")})
+                if role == "assistant":
+                    msg_item: Dict[str, Any] = {"role": "assistant", "content": turn.get("content") or None}
+                    if "tool_calls" in turn and turn["tool_calls"]:
+                        formatted_tcs = []
+                        for tc in turn["tool_calls"]:
+                            if isinstance(tc, dict):
+                                tc_id = tc.get("id", "")
+                                if "function" in tc:
+                                    func_name = tc["function"].get("name", "")
+                                    func_args = tc["function"].get("arguments", "{}")
+                                else:
+                                    func_name = tc.get("name", "")
+                                    func_args = tc.get("arguments", "{}")
+                                if isinstance(func_args, dict):
+                                    func_args = json.dumps(func_args)
+                                formatted_tcs.append({
+                                    "id": tc_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": func_name,
+                                        "arguments": str(func_args)
+                                    }
+                                })
+                        if formatted_tcs:
+                            msg_item["tool_calls"] = formatted_tcs
+                    messages.append(msg_item)
+
                 elif role == "tool":
                     messages.append({
                         "role": "tool",
                         "tool_call_id": turn.get("tool_call_id", ""),
-                        "content": turn.get("content", "")
+                        "content": str(turn.get("content", ""))
                     })
 
-        if images and len(images) > 0:
-            content_list: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
-            for img_bytes in images:
-                b64_img = base64.b64encode(img_bytes).decode("utf-8")
-                content_list.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{b64_img}",
-                        "detail": "low"
-                    }
-                })
-            messages.append({"role": "user", "content": content_list})
-        else:
-            messages.append({"role": "user", "content": prompt})
+                elif role in ("user", "system"):
+                    messages.append({"role": role, "content": str(turn.get("content", ""))})
+
+        if prompt and prompt.strip():
+            if images and len(images) > 0:
+                content_list: List[Dict[str, Any]] = [{"type": "text", "text": prompt.strip()}]
+                for img_bytes in images:
+                    b64_img = base64.b64encode(img_bytes).decode("utf-8")
+                    content_list.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64_img}",
+                            "detail": "low"
+                        }
+                    })
+                messages.append({"role": "user", "content": content_list})
+            else:
+                messages.append({"role": "user", "content": prompt.strip()})
 
         return messages
 
     async def send_message(
         self,
-        prompt: str,
+        prompt: Optional[str] = None,
         images: Optional[List[bytes]] = None,
         history: Optional[List[Dict[str, Any]]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         system_prompt: Optional[str] = None
     ) -> AIResponse:
-        """Envia mensagem assincrona para a OpenAI com recuperacao automatica em caso de modelo 404."""
+        """Envia mensagem assincrona para a OpenAI com suporte a function calling."""
         if not self._is_initialized and not self.initialize():
             return AIResponse(text="Erro: Provedor OpenAI nao esta inicializado com uma chave valida. Cadastre sua API Key nas Configuracoes.")
 
@@ -193,7 +222,7 @@ class OpenAIProvider(AIProvider):
 
     async def stream_response(
         self,
-        prompt: str,
+        prompt: Optional[str] = None,
         images: Optional[List[bytes]] = None,
         history: Optional[List[Dict[str, Any]]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,

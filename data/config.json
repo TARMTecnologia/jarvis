@@ -17,7 +17,7 @@
         "stt_engine": "openai_whisper",
         "stt_model_size": "base",
         "tts_engine": "sapi5",
-        "tts_voice_id": "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Speech_OneCore\\Voices\\Tokens\\MSTTS_V110_ptBR_DanielM",
+        "tts_voice_id": "pt-BR-FabioNeural",
         "tts_rate": 190,
         "tts_volume": 1.0,
         "barge_in_enabled": true

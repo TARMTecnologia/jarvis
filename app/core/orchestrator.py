@@ -4,6 +4,7 @@ Coordena a integracao completa entre Audio, Visao, Memoria, Provedores de IA, Fe
 """
 
 import asyncio
+import json
 import re
 import time
 from typing import Optional, List, Dict, Any
@@ -30,6 +31,7 @@ Voce tem acesso a memoria persistente, visao computacional (webcam/tela) e ferra
 
 COMPORTAMENTO E PERSONALIDADE:
 - Fale em portugues brasileiro de forma natural, inteligente, educada, concisa e prestativa.
+- Quando o usuario fizer perguntas sobre noticias, clima, fatos atuais, cotacoes ou navegacao, utilize a ferramenta search_web ou open_url.
 - Nunca afirme ter realizado uma acao antes de receber a confirmacao da ferramenta executada.
 - Quando uma pergunta depender do que o usuario esta mostrando ou do ambiente, utilize a camera ou contexto visual.
 - Quando uma informacao puder ser obtida por ferramenta local (hora, CPU, memoria, abrir programa, lembretes), use a ferramenta em vez de inventar dados.
@@ -37,7 +39,6 @@ COMPORTAMENTO E PERSONALIDADE:
 - Seja direto ao ponto. Nao forneca tutoriais longos quando uma confirmacao simples bastar.
 """
 
-# Padroes regex com suporte completo a variacoes de acentos e linguagem natural
 VISUAL_INTENT_PATTERNS = [
     re.compile(r"o que (?:voc[eê]\s+)?(?:est[aá]|t[aá]) (?:vendo|enxergando)", re.IGNORECASE),
     re.compile(r"o que (?:eu\s+)?(?:estou|to) (?:segurando|mostrando)", re.IGNORECASE),
@@ -215,24 +216,41 @@ class JarvisOrchestrator:
                     exec_result = await tool_executor.execute(name=tc.name, arguments=tc.arguments)
                     event_bus.publish(EventType.TOOL_FINISHED, {"tool": tc.name, "result": exec_result})
 
-                    result_str = str(exec_result.get("result") or exec_result.get("error"))
+                    raw_res = exec_result.get("result") or exec_result.get("error") or exec_result
+                    result_str = json.dumps(raw_res, ensure_ascii=False) if isinstance(raw_res, (dict, list)) else str(raw_res)
                     tool_results_history.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": result_str
                     })
 
+                tool_calls_payload = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments, ensure_ascii=False) if isinstance(tc.arguments, dict) else str(tc.arguments)
+                        }
+                    }
+                    for tc in response.tool_calls
+                ]
+
                 extended_history = history + [
                     {"role": "user", "content": clean_prompt},
-                    {"role": "assistant", "content": final_text, "tool_calls": [{"id": tc.id, "function": {"name": tc.name, "arguments": str(tc.arguments)}} for tc in response.tool_calls]}
+                    {
+                        "role": "assistant",
+                        "content": final_text or None,
+                        "tool_calls": tool_calls_payload
+                    }
                 ] + tool_results_history
 
                 state_machine.set_state(JarvisState.THINKING, "Interpretando retorno das ferramentas")
                 second_response = await self.ai_provider.send_message(
-                    prompt="Resuma a resposta para o usuario com base no resultado da ferramenta executada.",
+                    prompt=None,
                     images=None,
                     history=extended_history,
-                    tools=None,
+                    tools=tools,
                     system_prompt=system_prompt
                 )
                 final_text = second_response.text or final_text
