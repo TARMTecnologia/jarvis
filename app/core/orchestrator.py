@@ -37,21 +37,25 @@ COMPORTAMENTO E PERSONALIDADE:
 - Seja direto ao ponto. Nao forneca tutoriais longos quando uma confirmacao simples bastar.
 """
 
+# Padroes regex com suporte completo a variacoes de acentos e linguagem natural
 VISUAL_INTENT_PATTERNS = [
-    re.compile(r"o que (?:voce esta|ta) (?:vendo|enxergando)", re.IGNORECASE),
-    re.compile(r"o que (?:eu )?(?:estou|to) (?:segurando|mostrando)", re.IGNORECASE),
-    re.compile(r"que objeto e esse", re.IGNORECASE),
+    re.compile(r"o que (?:voc[eê]\s+)?(?:est[aá]|t[aá]) (?:vendo|enxergando)", re.IGNORECASE),
+    re.compile(r"o que (?:eu\s+)?(?:estou|to) (?:segurando|mostrando)", re.IGNORECASE),
+    re.compile(r"que objeto [eé] esse", re.IGNORECASE),
     re.compile(r"veja (?:isso|essa|esse|aqui)", re.IGNORECASE),
-    re.compile(r"leia (?:isso|esse|o que esta escrito)", re.IGNORECASE),
-    re.compile(r"que cor e (?:essa|isso)", re.IGNORECASE),
-    re.compile(r"olhe para", re.IGNORECASE)
+    re.compile(r"leia (?:isso|esse|o que est[aá] escrito)", re.IGNORECASE),
+    re.compile(r"que cor [eé] (?:essa|isso)", re.IGNORECASE),
+    re.compile(r"olhe para", re.IGNORECASE),
+    re.compile(r"olhe (?:pela|na) c[aâ]mera", re.IGNORECASE)
 ]
 
 SCREEN_INTENT_PATTERNS = [
-    re.compile(r"o que (?:esta|ta) (?:acontecendo|aberto|passando) (?:nessa|na) tela", re.IGNORECASE),
-    re.compile(r"olhe (?:minha|a) tela", re.IGNORECASE),
-    re.compile(r"veja minha tela", re.IGNORECASE),
-    re.compile(r"analise essa tela", re.IGNORECASE)
+    re.compile(r"o que (?:est[aá]|t[aá]) (?:acontecendo|aberto|passando|tem) (?:nessa|na|a) tela", re.IGNORECASE),
+    re.compile(r"o que tem (?:nessa|na) tela", re.IGNORECASE),
+    re.compile(r"olhe (?:minha|a|essa) tela", re.IGNORECASE),
+    re.compile(r"veja (?:minha|a|essa) tela", re.IGNORECASE),
+    re.compile(r"analise (?:essa|a|minha) tela", re.IGNORECASE),
+    re.compile(r"leia (?:minha|a) tela", re.IGNORECASE)
 ]
 
 
@@ -69,17 +73,12 @@ class JarvisOrchestrator:
         """Inicializa todos os subsistemas locais e o provedor de IA."""
         logger.info("Inicializando subsistemas do JARVIS...")
         
-        # 1. Provedor de IA
         self.ai_provider = AIProviderFactory.create_provider()
-        
-        # 2. Inicia agendador de lembretes
         reminder_scheduler.start()
         
-        # 3. Inicia subsistema de audio se configurado
         if app_config.audio.voice_mode in ("wakeword", "continuous"):
             audio_manager.start()
 
-        # 4. Inicia camera se configurada
         if app_config.vision.enabled:
             vision_manager.start_camera()
 
@@ -97,10 +96,19 @@ class JarvisOrchestrator:
         """Callback executado quando uma fala valida e transcrita."""
         text = event.data.get("text", "")
         if text:
-            asyncio.run_coroutine_threadsafe(
+            future = asyncio.run_coroutine_threadsafe(
                 self.process_user_message(text, from_voice=True),
                 self.get_event_loop()
             )
+            future.add_done_callback(self._on_future_done)
+
+    def _on_future_done(self, future) -> None:
+        """Trata excecoes nao capturadas na thread assincrona."""
+        try:
+            future.result()
+        except Exception as e:
+            logger.error(f"Erro ao processar mensagem do usuario em background: {e}", exc_info=True)
+            state_machine.set_state(JarvisState.ERROR, "Erro ao processar mensagem")
 
     def _handle_reminder_triggered_event(self, event: Event) -> None:
         """Dispara voz ao chegar a hora de um lembrete."""
@@ -121,7 +129,7 @@ class JarvisOrchestrator:
     async def process_user_message(self, user_text: str, from_voice: bool = False) -> str:
         """
         Processa uma mensagem enviada pelo usuario (via texto ou voz).
-        Retorna a resposta textual final gerada.
+        Retorna a resposta textual final gerada e fala a resposta via TTS.
         """
         clean_prompt = user_text.strip()
         if not clean_prompt:
@@ -131,7 +139,7 @@ class JarvisOrchestrator:
         state_machine.set_state(JarvisState.THINKING, "Processando mensagem")
         event_bus.publish(EventType.AI_RESPONSE_STARTED, {"prompt": clean_prompt})
 
-        # Se veio por voz, avisa a UI para exibir o balao da fala do usuario
+        # Se veio por voz, exibe o balao de mensagem do usuario no chat
         if from_voice:
             try:
                 from app.ui.components.signal_bridge import signal_bridge
@@ -139,97 +147,108 @@ class JarvisOrchestrator:
             except Exception:
                 pass
 
-        # 1. Verifica Comandos Explicitos de Memoria ("Lembre que...", "Esqueca tudo...")
-        explicit_memory_reply = memory_manager.handle_explicit_commands(clean_prompt)
-        if explicit_memory_reply:
-            self._finalize_turn(clean_prompt, explicit_memory_reply, from_voice=from_voice)
-            return explicit_memory_reply
+        try:
+            # 1. Verifica Comandos Explicitos de Memoria ("Lembre que...", "Esqueca tudo...")
+            explicit_memory_reply = memory_manager.handle_explicit_commands(clean_prompt)
+            if explicit_memory_reply:
+                self._finalize_turn(clean_prompt, explicit_memory_reply, from_voice=from_voice)
+                return explicit_memory_reply
 
-        # 2. Deteccao de Contexto Visual Automatico (Camera ou Tela)
-        images_to_send: List[bytes] = []
-        is_visual = False
+            # 2. Deteccao de Contexto Visual Automatico (Camera ou Tela)
+            images_to_send: List[bytes] = []
+            is_visual = False
 
-        for pat in SCREEN_INTENT_PATTERNS:
-            if pat.search(clean_prompt):
-                state_machine.set_state(JarvisState.WATCHING, "Capturando contexto da tela")
-                screen_bytes, _ = screen_context.capture_screen_jpeg_bytes()
-                if screen_bytes:
-                    images_to_send.append(screen_bytes)
-                    is_visual = True
-                break
-
-        if not is_visual:
-            for pat in VISUAL_INTENT_PATTERNS:
+            # Verifica se e pergunta sobre a tela
+            for pat in SCREEN_INTENT_PATTERNS:
                 if pat.search(clean_prompt):
-                    state_machine.set_state(JarvisState.WATCHING, "Capturando imagem da camera")
-                    cam_bytes = vision_manager.capture_frame_for_ai(force=True)
-                    if cam_bytes:
-                        images_to_send.append(cam_bytes)
+                    logger.info("Intencao visual detectada: Analise de Tela.")
+                    state_machine.set_state(JarvisState.WATCHING, "Capturando contexto da tela")
+                    screen_bytes, _ = screen_context.capture_screen_jpeg_bytes()
+                    if screen_bytes:
+                        images_to_send.append(screen_bytes)
                         is_visual = True
                     break
 
-        # 3. Monta o Prompt de Sistema Enriquecido com Memorias Semanticas
-        base_prompt = app_config.ai.system_prompt_override or DEFAULT_SYSTEM_PROMPT.format(
-            user_name=app_config.system.user_name
-        )
-        system_prompt = memory_manager.prepare_augmented_system_prompt(base_prompt, clean_prompt)
+            # Se nao foi tela, verifica se e pergunta sobre a camera
+            if not is_visual:
+                for pat in VISUAL_INTENT_PATTERNS:
+                    if pat.search(clean_prompt):
+                        logger.info("Intencao visual detectada: Webcam.")
+                        state_machine.set_state(JarvisState.WATCHING, "Capturando imagem da camera")
+                        cam_bytes = vision_manager.capture_frame_for_ai(force=True)
+                        if cam_bytes:
+                            images_to_send.append(cam_bytes)
+                            is_visual = True
+                        break
 
-        # 4. Obtem Historico Recente e Ferramentas Cadastradas
-        history = self.session.get_recent_history(limit=8)
-        tools = tool_registry.get_schemas_for_ai()
+            # 3. Monta o Prompt de Sistema Enriquecido com Memorias Semanticas
+            base_prompt = app_config.ai.system_prompt_override or DEFAULT_SYSTEM_PROMPT.format(
+                user_name=app_config.system.user_name
+            )
+            system_prompt = memory_manager.prepare_augmented_system_prompt(base_prompt, clean_prompt)
 
-        # 5. Envia Requisicao para a IA com suporte a Tool Calling
-        if self.ai_provider is None:
-            self.ai_provider = AIProviderFactory.create_provider()
+            # 4. Obtem Historico Recente e Ferramentas Cadastradas
+            history = self.session.get_recent_history(limit=8)
+            tools = tool_registry.get_schemas_for_ai()
 
-        response: AIResponse = await self.ai_provider.send_message(
-            prompt=clean_prompt,
-            images=images_to_send if images_to_send else None,
-            history=history,
-            tools=tools,
-            system_prompt=system_prompt
-        )
+            # 5. Envia Requisicao para a IA com suporte a Tool Calling
+            if self.ai_provider is None:
+                self.ai_provider = AIProviderFactory.create_provider()
 
-        final_text = response.text or ""
-
-        # 6. Executa Tool Calls se a IA solicitou
-        if response.tool_calls:
-            state_machine.set_state(JarvisState.EXECUTING_TOOL, "Executando ferramentas locais")
-            tool_results_history = []
-
-            for tc in response.tool_calls:
-                event_bus.publish(EventType.TOOL_REQUESTED, {"tool": tc.name, "arguments": tc.arguments})
-                exec_result = await tool_executor.execute(name=tc.name, arguments=tc.arguments)
-                event_bus.publish(EventType.TOOL_FINISHED, {"tool": tc.name, "result": exec_result})
-
-                result_str = str(exec_result.get("result") or exec_result.get("error"))
-                tool_results_history.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": result_str
-                })
-
-            extended_history = history + [
-                {"role": "user", "content": clean_prompt},
-                {"role": "assistant", "content": final_text, "tool_calls": [{"id": tc.id, "function": {"name": tc.name, "arguments": str(tc.arguments)}} for tc in response.tool_calls]}
-            ] + tool_results_history
-
-            state_machine.set_state(JarvisState.THINKING, "Interpretando retorno das ferramentas")
-            second_response = await self.ai_provider.send_message(
-                prompt="Resuma a resposta para o usuario com base no resultado da ferramenta executada.",
-                images=None,
-                history=extended_history,
-                tools=None,
+            response: AIResponse = await self.ai_provider.send_message(
+                prompt=clean_prompt,
+                images=images_to_send if images_to_send else None,
+                history=history,
+                tools=tools,
                 system_prompt=system_prompt
             )
-            final_text = second_response.text or final_text
 
-        # 7. Finalizacao e Resposta Falada
-        self._finalize_turn(clean_prompt, final_text, has_image=is_visual, from_voice=from_voice)
-        return final_text
+            final_text = response.text or ""
+
+            # 6. Executa Tool Calls se a IA solicitou
+            if response.tool_calls:
+                state_machine.set_state(JarvisState.EXECUTING_TOOL, "Executando ferramentas locais")
+                tool_results_history = []
+
+                for tc in response.tool_calls:
+                    event_bus.publish(EventType.TOOL_REQUESTED, {"tool": tc.name, "arguments": tc.arguments})
+                    exec_result = await tool_executor.execute(name=tc.name, arguments=tc.arguments)
+                    event_bus.publish(EventType.TOOL_FINISHED, {"tool": tc.name, "result": exec_result})
+
+                    result_str = str(exec_result.get("result") or exec_result.get("error"))
+                    tool_results_history.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result_str
+                    })
+
+                extended_history = history + [
+                    {"role": "user", "content": clean_prompt},
+                    {"role": "assistant", "content": final_text, "tool_calls": [{"id": tc.id, "function": {"name": tc.name, "arguments": str(tc.arguments)}} for tc in response.tool_calls]}
+                ] + tool_results_history
+
+                state_machine.set_state(JarvisState.THINKING, "Interpretando retorno das ferramentas")
+                second_response = await self.ai_provider.send_message(
+                    prompt="Resuma a resposta para o usuario com base no resultado da ferramenta executada.",
+                    images=None,
+                    history=extended_history,
+                    tools=None,
+                    system_prompt=system_prompt
+                )
+                final_text = second_response.text or final_text
+
+            # 7. Finalizacao e Resposta Falada
+            self._finalize_turn(clean_prompt, final_text, has_image=is_visual, from_voice=from_voice)
+            return final_text
+
+        except Exception as e:
+            logger.error(f"Erro inesperado no processamento de mensagem: {e}", exc_info=True)
+            err_msg = f"Desculpe, ocorreu uma instabilidade temporária: {str(e)}"
+            self._finalize_turn(clean_prompt, err_msg, from_voice=from_voice)
+            return err_msg
 
     def _finalize_turn(self, user_text: str, assistant_text: str, has_image: bool = False, from_voice: bool = False) -> None:
-        """Grava a interacao na memoria e dispara voz do TTS se necessario."""
+        """Grava a interacao na memoria e dispara voz do TTS."""
         self.session.add_turn(role="user", content=user_text, has_image=has_image)
         self.session.add_turn(role="assistant", content=assistant_text)
 
@@ -247,7 +266,9 @@ class JarvisOrchestrator:
 
         event_bus.publish(EventType.AI_RESPONSE_FINISHED, {"text": assistant_text})
 
-        if from_voice or not app_config.system.silent_mode:
+        # Fala a resposta do Jarvis se não estiver em modo silencioso
+        if not app_config.system.silent_mode:
+            logger.info(f"Falando resposta do JARVIS via TTS: '{assistant_text[:80]}...'")
             audio_manager.speak_text(assistant_text)
         else:
             state_machine.set_state(JarvisState.IDLE, "Pronto para novo comando")

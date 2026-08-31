@@ -29,7 +29,7 @@ class SettingsWindow(QDialog):
     def __init__(self, parent: QWidget = None):
         super().__init__(parent)
         self.setWindowTitle("JARVIS — Configurações")
-        self.resize(740, 560)
+        self.resize(760, 580)
         self.setStyleSheet(HUD_DARK_STYLESHEET)
 
         main_layout = QVBoxLayout(self)
@@ -195,6 +195,16 @@ class SettingsWindow(QDialog):
                 self.speaker_combo.setCurrentIndex(self.speaker_combo.count() - 1)
         layout.addWidget(self.speaker_combo)
 
+        # Voz do JARVIS (TTS)
+        layout.addWidget(QLabel("Voz do Assistente (Síntese TTS):"))
+        self.voice_combo = QComboBox()
+        voices = local_tts.list_voices()
+        for v in voices:
+            self.voice_combo.addItem(v["name"], v["id"])
+            if v["id"] == app_config.audio.tts_voice_id:
+                self.voice_combo.setCurrentIndex(self.voice_combo.count() - 1)
+        layout.addWidget(self.voice_combo)
+
         # Motor de Transcricao STT
         layout.addWidget(QLabel("Motor de Transcrição de Voz (STT):"))
         self.stt_engine_combo = QComboBox()
@@ -227,14 +237,20 @@ class SettingsWindow(QDialog):
 
         # Teste de Voz
         test_voice_layout = QHBoxLayout()
-        self.test_voice_btn = QPushButton("Testar Síntese de Voz (TTS)")
-        self.test_voice_btn.clicked.connect(lambda: local_tts.speak("Olá! Esta é a voz configurada para o JARVIS."))
+        self.test_voice_btn = QPushButton("Testar Voz Masculina Selecionada")
+        self.test_voice_btn.clicked.connect(self._test_voice)
         test_voice_layout.addWidget(self.test_voice_btn)
         test_voice_layout.addStretch()
         layout.addLayout(test_voice_layout)
 
         layout.addStretch()
         self.tabs.addTab(tab, "Áudio e Voz")
+
+    def _test_voice(self) -> None:
+        selected_vid = self.voice_combo.currentData()
+        app_config.audio.tts_voice_id = selected_vid
+        app_config.audio.tts_rate = self.speed_slider.value()
+        local_tts.speak("Olá! Sistemas de áudio online. Esta é a voz do Jarvis.")
 
     # 3. ABA CAMERA
     def _create_vision_tab(self) -> None:
@@ -402,6 +418,8 @@ class SettingsWindow(QDialog):
 
         app_config.audio.input_device_index = self.mic_combo.currentData()
         app_config.audio.output_device_index = self.speaker_combo.currentData()
+        if hasattr(self, 'voice_combo') and self.voice_combo.currentData():
+            app_config.audio.tts_voice_id = self.voice_combo.currentData()
         app_config.audio.stt_engine = self.stt_engine_combo.currentData() or "local_whisper"
         app_config.audio.voice_mode = self.voice_mode_combo.currentData()
         app_config.audio.tts_rate = self.speed_slider.value()

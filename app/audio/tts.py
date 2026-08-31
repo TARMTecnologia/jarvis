@@ -1,75 +1,104 @@
 ﻿"""
 Sintese de Voz Local (Text-To-Speech) para o JARVIS.
-Utiliza a engine nativa SAPI5 do Windows via pyttsx3 com suporte a interrupcao imediata (Barge-in).
+Utiliza a engine nativa SAPI5 e OneCore do Windows com suporte a vozes masculinas (Microsoft Daniel) e inicializacao COM por thread.
 """
 
 import threading
-import queue
+import winreg
 from typing import List, Dict, Any, Optional, Callable
 import pyttsx3
+import pythoncom
 from app.core.config import app_config
 from app.core.logging_config import get_logger
 
 logger = get_logger("audio.tts")
 
+DANIEL_MALE_VOICE_TOKEN = r"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens\MSTTS_V110_ptBR_DanielM"
+
 
 class LocalTTS:
-    """Motor de síntese de voz local nativo do Windows."""
+    """Motor de síntese de voz local nativo do Windows com suporte a vozes masculinas e femininas."""
 
     def __init__(self):
         self._lock = threading.Lock()
         self._is_speaking = False
-        self._engine: Optional[pyttsx3.Engine] = None
-        self._init_engine()
+        self._default_male_voice_id = None
+        self._discover_voices()
 
-    def _init_engine(self) -> None:
-        """Inicializa a engine pyttsx3."""
-        try:
-            self._engine = pyttsx3.init("sapi5")
-            self._engine.setProperty("rate", app_config.audio.tts_rate)
-            self._engine.setProperty("volume", app_config.audio.tts_volume)
-            
-            # Se houver voz configurada ou preferência por voz em português
-            voices = self._engine.getProperty("voices")
-            pt_voice = None
+    def _discover_voices(self) -> None:
+        """Descobre vozes SAPI5 e OneCore instaladas no Windows."""
+        voices = self.list_voices()
+        # Procura primeiro por Daniel (Masculino PT-BR)
+        for v in voices:
+            vid = v["id"].lower()
+            vname = v["name"].lower()
+            if "daniel" in vname or "daniel" in vid:
+                self._default_male_voice_id = v["id"]
+                break
+        
+        # Se não achou Daniel, procura qualquer voz masculina ou em português
+        if not self._default_male_voice_id:
             for v in voices:
-                if "portuguese" in v.name.lower() or "brazil" in v.name.lower() or "maria" in v.name.lower() or "daniel" in v.name.lower():
-                    pt_voice = v.id
+                vname = v["name"].lower()
+                if "portuguese" in vname or "brazil" in vname:
+                    self._default_male_voice_id = v["id"]
                     break
-            
-            selected_voice = app_config.audio.tts_voice_id or pt_voice
-            if selected_voice:
-                self._engine.setProperty("voice", selected_voice)
 
-            logger.info("Motor local SAPI5 TTS inicializado com sucesso.")
-        except Exception as e:
-            logger.error(f"Erro ao inicializar pyttsx3 SAPI5: {e}")
-            self._engine = None
+        # Se ainda não estiver configurado no config, define o padrão
+        if not app_config.audio.tts_voice_id and self._default_male_voice_id:
+            app_config.audio.tts_voice_id = self._default_male_voice_id
+            app_config.save()
+            logger.info(f"Voz masculina padrão configurada para o JARVIS: {self._default_male_voice_id}")
 
     def list_voices(self) -> List[Dict[str, Any]]:
-        """Lista todas as vozes instaladas no Windows."""
+        """Lista todas as vozes SAPI5 e OneCore instaladas no Windows."""
         voice_list = []
-        if self._engine is None:
-            self._init_engine()
+        seen_ids = set()
 
-        if self._engine is not None:
-            try:
-                voices = self._engine.getProperty("voices")
-                for v in voices:
+        # 1. Busca vozes OneCore no Registro do Windows
+        try:
+            k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens")
+            num_subkeys = winreg.QueryInfoKey(k)[0]
+            for i in range(num_subkeys):
+                subkey_name = winreg.EnumKey(k, i)
+                sub = winreg.OpenKey(k, subkey_name)
+                desc = winreg.QueryValue(sub, "")
+                token_id = rf"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens\{subkey_name}"
+                gender = "Masculino" if any(x in subkey_name.lower() or x in desc.lower() for x in ["daniel", "david", "mark", "pablo", "paul", "adam", "stefan", "andrei", "pavel", "jakub", "naayf"]) else "Feminino"
+                if token_id not in seen_ids:
+                    seen_ids.add(token_id)
+                    voice_list.append({
+                        "id": token_id,
+                        "name": f"{desc} ({gender} - OneCore)",
+                        "gender": gender
+                    })
+        except Exception as e:
+            logger.debug(f"Aviso ao consultar vozes OneCore no registro: {e}")
+
+        # 2. Busca vozes SAPI5 padrão via pyttsx3
+        pythoncom.CoInitialize()
+        try:
+            engine = pyttsx3.init("sapi5")
+            sapi_voices = engine.getProperty("voices")
+            for v in sapi_voices:
+                if v.id not in seen_ids:
+                    seen_ids.add(v.id)
+                    gender = "Masculino" if "david" in v.name.lower() or "daniel" in v.name.lower() else "Feminino"
                     voice_list.append({
                         "id": v.id,
-                        "name": v.name,
-                        "languages": getattr(v, "languages", []),
-                        "gender": getattr(v, "gender", "unknown")
+                        "name": f"{v.name} ({gender})",
+                        "gender": gender
                     })
-            except Exception as e:
-                logger.error(f"Erro ao listar vozes SAPI5: {e}")
+        except Exception as e:
+            logger.debug(f"Aviso ao consultar vozes SAPI5: {e}")
+        finally:
+            pythoncom.CoUninitialize()
+
         return voice_list
 
     def speak(self, text: str, on_start: Optional[Callable[[], None]] = None, on_end: Optional[Callable[[], None]] = None) -> None:
         """
-        Sintetiza e fala o texto síncronamente na thread atual.
-        Permite interrupção imediata via stop().
+        Sintetiza e fala o texto com voz masculina e inicialização COM por thread.
         """
         clean_text = text.strip()
         if not clean_text:
@@ -84,15 +113,18 @@ class LocalTTS:
             except Exception:
                 pass
 
+        pythoncom.CoInitialize()
         try:
-            # Recria a engine por chamada para evitar problemas de loop com SAPI5 no Windows
             engine = pyttsx3.init("sapi5")
-            engine.setProperty("rate", app_config.audio.tts_rate)
-            engine.setProperty("volume", app_config.audio.tts_volume)
-            
-            selected_voice = app_config.audio.tts_voice_id
+            engine.setProperty("rate", app_config.audio.tts_rate or 190)
+            engine.setProperty("volume", app_config.audio.tts_volume or 1.0)
+
+            selected_voice = app_config.audio.tts_voice_id or self._default_male_voice_id or DANIEL_MALE_VOICE_TOKEN
             if selected_voice:
-                engine.setProperty("voice", selected_voice)
+                try:
+                    engine.setProperty("voice", selected_voice)
+                except Exception as ve:
+                    logger.warning(f"Não foi possível aplicar a voz {selected_voice}: {ve}")
 
             engine.say(clean_text)
             engine.runAndWait()
@@ -101,6 +133,7 @@ class LocalTTS:
         except Exception as e:
             logger.error(f"Erro durante síntese de voz TTS: {e}")
         finally:
+            pythoncom.CoUninitialize()
             with self._lock:
                 self._is_speaking = False
             if on_end:
@@ -113,11 +146,6 @@ class LocalTTS:
         """Interrompe a fala imediatamente."""
         with self._lock:
             self._is_speaking = False
-        try:
-            if self._engine is not None:
-                self._engine.stop()
-        except Exception as e:
-            logger.debug(f"Erro ao parar engine TTS: {e}")
 
     @property
     def is_speaking(self) -> bool:
