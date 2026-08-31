@@ -1,6 +1,6 @@
 ﻿"""
 Widget Central do ORB Animado do JARVIS.
-Renderiza particulas, aneis orbitais e pulsos de voz em tempo real com QPainter.
+Renderiza particulas, aneis orbitais e pulsos de voz em tempo real com QPainter e suporte thread-safe via SignalBridge.
 """
 
 import math
@@ -12,7 +12,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 from app.core.state_machine import state_machine, JarvisState
-from app.core.event_bus import event_bus, EventType, Event
+from app.ui.components.signal_bridge import signal_bridge
 
 
 class OrbWidget(QWidget):
@@ -28,22 +28,23 @@ class OrbWidget(QWidget):
         self._phase: float = 0.0
         self._pulse_size: float = 0.0
 
-        # Conecta listeners
-        state_machine.add_listener(self._on_state_changed)
-        event_bus.subscribe(EventType.AUDIO_LEVEL_CHANGED, self._on_audio_level)
+        # Conecta via SignalBridge (seguranca de thread na GUI)
+        signal_bridge.sig_state_changed.connect(self._on_state_changed_str)
+        signal_bridge.sig_audio_level.connect(self._on_audio_level_float)
 
         # Timer de renderizacao a ~45 FPS
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_animation)
         self._timer.start(22)
 
-    def _on_state_changed(self, old_state: JarvisState, new_state: JarvisState) -> None:
-        self._state = new_state
+    def _on_state_changed_str(self, old_state_val: str, new_state_val: str) -> None:
+        try:
+            self._state = JarvisState(new_state_val)
+        except Exception:
+            self._state = JarvisState.IDLE
         self.update()
 
-    def _on_audio_level(self, event: Event) -> None:
-        raw_rms = event.data.get("rms", 0.0)
-        # Amortecimento suave
+    def _on_audio_level_float(self, raw_rms: float) -> None:
         self._audio_rms = self._audio_rms * 0.7 + min(1.0, raw_rms * 12.0) * 0.3
 
     def _update_animation(self) -> None:
@@ -78,7 +79,7 @@ class OrbWidget(QWidget):
         elif self._state == JarvisState.EXECUTING_TOOL:
             core_color = QColor(245, 158, 11)     # Dourado HUD
             glow_color = QColor(251, 191, 36, 160)
-            status_text = "● EXECUTANDO ACAO..."
+            status_text = "● EXECUTANDO AÇÃO..."
         elif self._state == JarvisState.WATCHING:
             core_color = QColor(6, 182, 212)       # Ciano Optico
             glow_color = QColor(34, 211, 238, 180)

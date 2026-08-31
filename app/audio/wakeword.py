@@ -1,6 +1,6 @@
 ﻿"""
-Detector de Palavra de Ativacao (Wake Word) Local para o JARVIS.
-Suporta os modos: Wake Word ("Jarvis"), Conversacao Continua e Push-to-Talk.
+Detector de Palavra de Ativacao (Wake Word) e Comandos de Voz do JARVIS.
+Detecta a palavra de ativacao "Jarvis" (com tolerancia fonetica), modos continuo/push-to-talk e comandos de interrupcao.
 """
 
 import re
@@ -10,57 +10,62 @@ from app.core.logging_config import get_logger
 
 logger = get_logger("audio.wakeword")
 
-STOP_COMMANDS = [
-    re.compile(r"^(?:jarvis,?\s*)?(?:pare|parar|silencio|silncio|cancelar|cala\s*a\s*boca|quieto|stop)\.?$", re.IGNORECASE),
-    re.compile(r"\b(?:pare|silencio|cancelar)\b", re.IGNORECASE)
-]
+# Padrao regex com tolerancia fonetica para "Jarvis"
+WAKE_WORD_PATTERN = re.compile(
+    r"(?:e\s+a[ií]|ei|oi|ol[aá]|fala|por\s+favor\s+)?\b(jarvis|i[aá]rvis|jarves|jarvys|jarve|j[aá]rvis)\b",
+    re.IGNORECASE
+)
+
+# Comandos de parada imediata (Barge-in)
+STOP_COMMAND_PATTERN = re.compile(
+    r"\b(jarvis,?\s*)?(pare|parar|sil[eê]ncio|chega|cancele?|desligar?|calado|para\s+de\s+falar)\b",
+    re.IGNORECASE
+)
 
 
 class WakeWordDetector:
-    """Gerencia a deteccao local de palavras de ativacao e comandos de parada."""
+    """Valida se o texto transcrito contem a palavra de ativacao ou comandos de controle."""
 
-    def __init__(self, wake_word: str = "Jarvis"):
-        self.wake_word = wake_word.strip().lower()
-        self._pattern = re.compile(rf"\b{re.escape(self.wake_word)}\b", re.IGNORECASE)
+    def __init__(self, default_wake_word: str = "Jarvis"):
+        self.default_wake_word = default_wake_word
 
     def is_stop_command(self, text: str) -> bool:
-        """Verifica se o texto e uma ordem direta de cancelamento/interrupcao da fala."""
-        clean = text.strip().lower()
-        for pat in STOP_COMMANDS:
-            if pat.search(clean):
-                return True
-        return False
+        """Verifica se o usuario ordenou interrupcao imediata da fala do Jarvis."""
+        if not text:
+            return False
+        return bool(STOP_COMMAND_PATTERN.search(text.strip()))
 
-    def process_transcription(self, text: str, mode: Optional[str] = None) -> Tuple[bool, str]:
+    def check_wake_word(self, text: str) -> Tuple[bool, str]:
         """
-        Processa a transcricao do usuario de acordo com o modo de voz configurado.
-        Retorna:
-          (is_activated: bool, prompt_limpo: str)
+        Verifica a presenca da palavra de ativacao no texto transcrito.
+        Retorna (detectado: bool, texto_limpo: str).
         """
-        active_mode = mode or app_config.audio.voice_mode
-        clean_text = text.strip()
-
-        if not clean_text:
+        if not text or not text.strip():
             return False, ""
 
-        # Modo 1: Push to Talk (sempre ativado quando disparado)
-        if active_mode == "push_to_talk":
-            return True, clean_text
+        clean_text = text.strip()
+        voice_mode = app_config.audio.voice_mode
 
-        # Modo 2: Conversacao Continua (qualquer fala ativa o assistente)
-        if active_mode == "continuous":
-            # Remove a palavra Jarvis se o usuario tiver dito no inicio
-            stripped = self._pattern.sub("", clean_text).strip(", ").strip()
-            return True, stripped or clean_text
+        # 1. Modo Continuo ou Push-to-Talk: qualquer fala e considerada valida
+        if voice_mode in ("continuous", "push_to_talk"):
+            # Remove a palavra "Jarvis" se o usuario falou por habito
+            cleaned = WAKE_WORD_PATTERN.sub("", clean_text).strip()
+            # Limpa virgulas ou dois pontos no inicio
+            cleaned = re.sub(r"^[,.:\- ]+", "", cleaned).strip()
+            return True, cleaned if cleaned else clean_text
 
-        # Modo 3: Wake Word ("Jarvis")
-        if self._pattern.search(clean_text):
-            # Remove a palavra wake word do inicio do prompt
-            stripped = self._pattern.sub("", clean_text).strip(", ").strip()
-            logger.info(f"Wake word '{self.wake_word}' detectada! Prompt extraido: '{stripped}'")
-            return True, stripped
+        # 2. Modo Wake Word: exige a palavra "Jarvis"
+        match = WAKE_WORD_PATTERN.search(clean_text)
+        if match:
+            # Extrai o comando apos a palavra de ativacao
+            idx_end = match.end()
+            prompt = clean_text[idx_end:].strip()
+            prompt = re.sub(r"^[,.:\- ]+", "", prompt).strip()
+
+            logger.info(f"Wake word detectada! Prompt extraido: '{prompt}'")
+            return True, prompt
 
         return False, ""
 
 
-wake_word_detector = WakeWordDetector(wake_word=app_config.audio.wake_word)
+wake_word_detector = WakeWordDetector()

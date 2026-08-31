@@ -1,6 +1,6 @@
 ﻿"""
 Detector de Atividade de Voz (VAD) Local para o JARVIS.
-Detecta inicio e termino de fala com base em limiar dinamico de energia RMS e janela de silencio.
+Detecta inicio e termino de fala com base em limiar dinamico de energia RMS e janela de silencio aprimorada.
 """
 
 import time
@@ -17,8 +17,8 @@ class VoiceActivityDetector:
 
     def __init__(
         self,
-        energy_threshold: float = 0.015,
-        silence_duration_ms: int = 800,
+        energy_threshold: float = 0.008,
+        silence_duration_ms: int = 1200,
         sample_rate: int = 16000
     ):
         self.energy_threshold = energy_threshold
@@ -46,11 +46,12 @@ class VoiceActivityDetector:
     def process_frame(self, frame: np.ndarray, rms: float) -> None:
         """Processa um chunk de audio vindo do microfone."""
         now = time.time()
-        threshold = self.energy_threshold
+        # Ajusta sensibilidade com base na configuracao
+        threshold = self.energy_threshold * (1.5 - app_config.audio.vad_sensitivity)
 
-        # Mantem pequeno buffer circular de pre-fala (aproximadamente 300ms)
+        # Buffer circular de pre-fala (aproximadamente 400ms)
         self._pre_speech_buffer.append(frame)
-        if len(self._pre_speech_buffer) > 6:
+        if len(self._pre_speech_buffer) > 8:
             self._pre_speech_buffer.pop(0)
 
         if rms >= threshold:
@@ -72,14 +73,14 @@ class VoiceActivityDetector:
         elif self._is_speaking:
             self._speech_buffer.append(frame)
             silence_ms = (now - self._last_speech_time) * 1000
+            target_silence = app_config.audio.silence_threshold_ms or self.silence_duration_ms
 
-            # Se o silencio ultrapassar o limiar, finaliza a captura de fala
-            if silence_ms >= self.silence_duration_ms:
+            if silence_ms >= target_silence:
                 self._is_speaking = False
                 speech_duration = now - self._speech_start_time
 
-                # Ignora ruidos extremamente curtos (< 400ms)
-                if speech_duration >= 0.4 and len(self._speech_buffer) > 0:
+                # Ignora estalos e ruidos menores que 300ms
+                if speech_duration >= 0.3 and len(self._speech_buffer) > 0:
                     audio_segment = np.concatenate(self._speech_buffer, axis=0)
                     logger.debug(f"Fim de fala detectado (duracao: {speech_duration:.2f}s, frames: {len(audio_segment)}).")
                     if self._on_speech_finished:

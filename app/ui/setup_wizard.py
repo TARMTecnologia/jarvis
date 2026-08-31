@@ -53,11 +53,10 @@ class ProviderPage(QWizardPage):
 
         self.btn_group = QButtonGroup(self)
 
-        self.rb_openai = QRadioButton("OpenAI (GPT-4o, GPT-4o-mini, Realtime)")
+        self.rb_openai = QRadioButton("OpenAI (GPT-4o, GPT-4o-mini, o3-mini)")
         self.rb_gemini = QRadioButton("Google Gemini (Gemini 2.0 Flash, Gemini 1.5 Pro)")
         self.rb_claude = QRadioButton("Anthropic Claude (Claude 3.5 Sonnet, Claude 3.5 Haiku)")
 
-        # Seleciona padrao atual
         current = app_config.ai.provider.lower()
         if current == "gemini":
             self.rb_gemini.setChecked(True)
@@ -98,10 +97,10 @@ class ApiKeyPage(QWizardPage):
         layout.addWidget(self.key_input)
 
         self.model_combo = QComboBox()
-        layout.addWidget(QLabel("Modelo Recomendado:"))
+        self.model_combo.setEditable(True)
+        layout.addWidget(QLabel("Modelo (Selecione ou digite):"))
         layout.addWidget(self.model_combo)
 
-        # Botao de Teste
         test_layout = QHBoxLayout()
         self.test_btn = QPushButton("Testar Conexão com a IA")
         self.test_btn.clicked.connect(self._test_connection)
@@ -116,12 +115,11 @@ class ApiKeyPage(QWizardPage):
         wizard: SetupWizard = self.wizard()
         prov = wizard.provider_page.get_selected_provider()
         
-        # Popula combo de modelos
         self.model_combo.clear()
         models = RECOMMENDED_MODELS.get(prov, {}).get("recommended", ["default"])
         self.model_combo.addItems(models)
+        self.model_combo.setEditText(models[0] if models else "gpt-4o")
 
-        # Carrega chave salva se houver
         saved_key = secrets_manager.get_api_key(prov)
         if saved_key:
             self.key_input.setText(saved_key)
@@ -157,7 +155,6 @@ class ApiKeyPage(QWizardPage):
             if success:
                 self.status_lbl.setText("● Conexão Estabelecida com Sucesso!")
                 self.status_lbl.setStyleSheet("color: #10b981;")
-                # Salva chave no Keyring
                 secrets_manager.set_api_key(prov, key)
                 app_config.ai.provider = prov
                 app_config.ai.model = model
@@ -181,17 +178,14 @@ class HardwarePage(QWizardPage):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
-        # Microfone
         layout.addWidget(QLabel("Microfone (Entrada):"))
         self.mic_combo = QComboBox()
         layout.addWidget(self.mic_combo)
 
-        # Alto-falante
         layout.addWidget(QLabel("Alto-falante (Saída):"))
         self.speaker_combo = QComboBox()
         layout.addWidget(self.speaker_combo)
 
-        # Teste de Voz
         btn_layout = QHBoxLayout()
         self.test_voice_btn = QPushButton("Testar Voz do JARVIS")
         self.test_voice_btn.clicked.connect(self._test_voice)

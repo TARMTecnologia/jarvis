@@ -1,6 +1,6 @@
-"""
+﻿"""
 Provedor de IA OpenAI para o JARVIS.
-Suporta modelos GPT-4o, GPT-4o-mini, GPT-4o Realtime, visão multimodal e function calling.
+Suporta modelos GPT-4o, GPT-4o-mini, o3-mini, o1, visão multimodal e function calling com fallback resiliente.
 """
 
 import base64
@@ -13,19 +13,19 @@ logger = get_logger("ai.openai")
 
 
 class OpenAIProvider(AIProvider):
-    """Implementação do provedor OpenAI utilizando o SDK oficial."""
+    """Implementacao do provedor OpenAI utilizando o SDK oficial."""
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        super().__init__(api_key=api_key, model=model or "gpt-4o-mini")
+        super().__init__(api_key=api_key, model=model or "gpt-4o")
         self._client = None
         self._async_client = None
         if self.api_key:
             self.initialize()
 
     def initialize(self) -> bool:
-        """Inicializa os clientes síncronos e assíncronos da OpenAI."""
+        """Inicializa os clientes sincronos e assincronos da OpenAI."""
         if not self.api_key:
-            logger.warning("Não é possível inicializar OpenAIProvider: API Key não informada.")
+            logger.warning("Nao e possivel inicializar OpenAIProvider: API Key nao informada.")
             self._is_initialized = False
             return False
 
@@ -42,28 +42,28 @@ class OpenAIProvider(AIProvider):
             return False
 
     async def test_connection(self) -> Tuple[bool, str]:
-        """Testa a conexão e a validade da chave de API."""
+        """Testa a conexao e a validade da chave de API."""
         if not self.api_key:
-            return False, "Chave de API da OpenAI não informada."
+            return False, "Chave de API da OpenAI nao informada."
 
         try:
             from openai import AsyncOpenAI
             client = self._async_client or AsyncOpenAI(api_key=self.api_key)
             response = await client.models.list()
             if response and response.data:
-                return True, "Conexão com a OpenAI estabelecida com sucesso."
+                return True, "Conexao com a OpenAI estabelecida com sucesso."
             return False, "Nenhum modelo retornado pela API da OpenAI."
         except Exception as e:
             err_msg = str(e)
-            logger.warning(f"Falha no teste de conexão OpenAI: {err_msg}")
+            logger.warning(f"Falha no teste de conexao OpenAI: {err_msg}")
             if "Incorrect API key" in err_msg or "invalid_api_key" in err_msg:
-                return False, "Chave de API da OpenAI inválida."
+                return False, "Chave de API da OpenAI invalida."
             elif "quota" in err_msg.lower():
                 return False, "Cota da OpenAI excedida."
-            return False, f"Erro de conexão com OpenAI: {err_msg}"
+            return False, f"Erro de conexao com OpenAI: {err_msg}"
 
     def format_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Converte definições de ferramentas padrão para a especificação da OpenAI."""
+        """Converte definicoes de ferramentas padrao para a especificacao da OpenAI."""
         openai_tools = []
         for t in tools:
             openai_tools.append({
@@ -87,7 +87,7 @@ class OpenAIProvider(AIProvider):
         history: Optional[List[Dict[str, Any]]] = None,
         system_prompt: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """Constrói o payload de mensagens com suporte a imagens em base64."""
+        """Constroi o payload de mensagens com suporte a imagens em base64."""
         messages = []
 
         if system_prompt:
@@ -130,51 +130,66 @@ class OpenAIProvider(AIProvider):
         tools: Optional[List[Dict[str, Any]]] = None,
         system_prompt: Optional[str] = None
     ) -> AIResponse:
-        """Envia mensagem assíncrona para a OpenAI."""
+        """Envia mensagem assincrona para a OpenAI com recuperacao automatica em caso de modelo 404."""
         if not self._is_initialized and not self.initialize():
-            return AIResponse(text="Erro: Provedor OpenAI não está inicializado com uma chave válida.")
+            return AIResponse(text="Erro: Provedor OpenAI nao esta inicializado com uma chave valida. Cadastre sua API Key nas Configuracoes.")
+
+        messages = self._build_messages(prompt, images, history, system_prompt)
+        kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+        }
+
+        if tools and len(tools) > 0:
+            kwargs["tools"] = self.format_tools(tools)
+            kwargs["tool_choice"] = "auto"
 
         try:
-            messages = self._build_messages(prompt, images, history, system_prompt)
-            kwargs: Dict[str, Any] = {
-                "model": self.model,
-                "messages": messages,
-            }
-
-            if tools and len(tools) > 0:
-                kwargs["tools"] = self.format_tools(tools)
-                kwargs["tool_choice"] = "auto"
-
-            completion = await self._async_client.chat.completions.create(**kwargs)
-            choice = completion.choices[0]
-            message = choice.message
-
-            tool_calls = []
-            if message.tool_calls:
-                for tc in message.tool_calls:
-                    args = self.parse_tool_arguments(tc.function.arguments)
-                    tool_calls.append(ToolCallRequest(
-                        id=tc.id,
-                        name=tc.function.name,
-                        arguments=args
-                    ))
-
-            usage = {
-                "input_tokens": completion.usage.prompt_tokens if completion.usage else 0,
-                "output_tokens": completion.usage.completion_tokens if completion.usage else 0
-            }
-
-            return AIResponse(
-                text=message.content or "",
-                tool_calls=tool_calls,
-                finish_reason=choice.finish_reason or "stop",
-                usage=usage,
-                raw_response=completion
-            )
-
+            return await self._execute_chat_completion(kwargs)
         except Exception as e:
-            logger.error(f"Erro na requisição OpenAI: {e}")
-            return AIResponse(text=f"Desculpe, ocorreu um erro ao comunicar com a OpenAI: {str(e)}")
+            err_str = str(e)
+            logger.warning(f"Erro na requisicao OpenAI com modelo '{self.model}': {err_str}")
+
+            if "model_not_found" in err_str or "does not exist" in err_str or "404" in err_str:
+                fallback_model = "gpt-4o-mini" if self.model != "gpt-4o-mini" else "gpt-4o"
+                logger.info(f"Executando fallback automatico para modelo '{fallback_model}'...")
+                kwargs["model"] = fallback_model
+                try:
+                    res = await self._execute_chat_completion(kwargs)
+                    res.text = f"[Aviso: O modelo '{self.model}' não estava disponível em sua conta OpenAI. Resposta via {fallback_model}:]\n\n" + res.text
+                    return res
+                except Exception as fb_err:
+                    logger.error(f"Erro tambem no modelo de fallback: {fb_err}")
+
+            return AIResponse(text=f"Desculpe, ocorreu um erro ao comunicar com a OpenAI: {err_str}")
+
+    async def _execute_chat_completion(self, kwargs: Dict[str, Any]) -> AIResponse:
+        completion = await self._async_client.chat.completions.create(**kwargs)
+        choice = completion.choices[0]
+        message = choice.message
+
+        tool_calls = []
+        if message.tool_calls:
+            for tc in message.tool_calls:
+                args = self.parse_tool_arguments(tc.function.arguments)
+                tool_calls.append(ToolCallRequest(
+                    id=tc.id,
+                    name=tc.function.name,
+                    arguments=args
+                ))
+
+        usage = {
+            "input_tokens": completion.usage.prompt_tokens if completion.usage else 0,
+            "output_tokens": completion.usage.completion_tokens if completion.usage else 0
+        }
+
+        return AIResponse(
+            text=message.content or "",
+            tool_calls=tool_calls,
+            finish_reason=choice.finish_reason or "stop",
+            usage=usage,
+            raw_response=completion
+        )
 
     async def stream_response(
         self,
@@ -186,7 +201,7 @@ class OpenAIProvider(AIProvider):
     ) -> AsyncGenerator[AIResponseChunk, None]:
         """Gera resposta via streaming incremental."""
         if not self._is_initialized and not self.initialize():
-            yield AIResponseChunk(text="Erro: OpenAI não inicializado.", is_done=True)
+            yield AIResponseChunk(text="Erro: OpenAI nao inicializado.", is_done=True)
             return
 
         try:
@@ -202,7 +217,6 @@ class OpenAIProvider(AIProvider):
                 kwargs["tool_choice"] = "auto"
 
             stream = await self._async_client.chat.completions.create(**kwargs)
-
             accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
 
             async for chunk in stream:
@@ -250,7 +264,7 @@ class OpenAIProvider(AIProvider):
 
         except Exception as e:
             logger.error(f"Erro no streaming OpenAI: {e}")
-            yield AIResponseChunk(text=f"\n[Erro na transmissão: {str(e)}]", is_done=True)
+            yield AIResponseChunk(text=f"\n[Erro na transmissao: {str(e)}]", is_done=True)
 
     def supports_realtime(self) -> bool:
         return "realtime" in self.model.lower()

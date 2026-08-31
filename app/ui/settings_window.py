@@ -29,7 +29,7 @@ class SettingsWindow(QDialog):
     def __init__(self, parent: QWidget = None):
         super().__init__(parent)
         self.setWindowTitle("JARVIS — Configurações")
-        self.resize(720, 540)
+        self.resize(740, 560)
         self.setStyleSheet(HUD_DARK_STYLESHEET)
 
         main_layout = QVBoxLayout(self)
@@ -86,7 +86,7 @@ class SettingsWindow(QDialog):
 
         # API Key
         key_layout = QVBoxLayout()
-        key_layout.addWidget(QLabel("Chave de API (Armazenada no Windows Credential Manager):"))
+        key_layout.addWidget(QLabel("Chave de API (Armazenada com segurança no Windows Credential Locker):"))
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         saved_key = secrets_manager.get_api_key(app_config.ai.provider)
@@ -95,10 +95,11 @@ class SettingsWindow(QDialog):
         key_layout.addWidget(self.api_key_input)
         layout.addLayout(key_layout)
 
-        # Modelo
+        # Modelo (Editavel)
         model_layout = QHBoxLayout()
-        model_layout.addWidget(QLabel("Modelo:"))
+        model_layout.addWidget(QLabel("Modelo de IA (Selecione ou digite um customizado):"))
         self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
         self._populate_models(app_config.ai.provider)
         model_layout.addWidget(self.model_combo)
         layout.addLayout(model_layout)
@@ -121,8 +122,7 @@ class SettingsWindow(QDialog):
         prov_clean = provider_name.lower().replace("openai", "openai").replace("gemini", "gemini").replace("claude", "claude")
         models = RECOMMENDED_MODELS.get(prov_clean, {}).get("recommended", [app_config.ai.model])
         self.model_combo.addItems(models)
-        if app_config.ai.model in models:
-            self.model_combo.setCurrentText(app_config.ai.model)
+        self.model_combo.setEditText(app_config.ai.model)
 
     def _on_provider_changed(self, text: str) -> None:
         prov = text.lower()
@@ -195,6 +195,15 @@ class SettingsWindow(QDialog):
                 self.speaker_combo.setCurrentIndex(self.speaker_combo.count() - 1)
         layout.addWidget(self.speaker_combo)
 
+        # Motor de Transcricao STT
+        layout.addWidget(QLabel("Motor de Transcrição de Voz (STT):"))
+        self.stt_engine_combo = QComboBox()
+        self.stt_engine_combo.addItem("Whisper Local (Faster-Whisper int8 100% Offline)", "local_whisper")
+        self.stt_engine_combo.addItem("OpenAI Whisper Cloud (whisper-1 — Máxima Precisão PT-BR)", "openai_whisper")
+        if app_config.audio.stt_engine == "openai_whisper":
+            self.stt_engine_combo.setCurrentIndex(1)
+        layout.addWidget(self.stt_engine_combo)
+
         # Modo de Voz
         layout.addWidget(QLabel("Modo de Ativação:"))
         self.voice_mode_combo = QComboBox()
@@ -233,7 +242,6 @@ class SettingsWindow(QDialog):
         layout = QVBoxLayout(tab)
         layout.setSpacing(12)
 
-        # Dispositivo
         layout.addWidget(QLabel("Dispositivo de Câmera:"))
         self.cam_combo = QComboBox()
         cams = camera_capture.list_cameras()
@@ -243,12 +251,10 @@ class SettingsWindow(QDialog):
                 self.cam_combo.setCurrentIndex(self.cam_combo.count() - 1)
         layout.addWidget(self.cam_combo)
 
-        # Amostragem Inteligente
         self.smart_scene_cb = QCheckBox("Amostragem inteligente (enviar frames apenas quando houver mudança de cena)")
         self.smart_scene_cb.setChecked(app_config.vision.smart_scene_sampling)
         layout.addWidget(self.smart_scene_cb)
 
-        # FPS para IA
         fps_layout = QHBoxLayout()
         fps_layout.addWidget(QLabel("Taxa máxima de envio para IA (FPS):"))
         self.ai_fps_spin = QSpinBox()
@@ -275,7 +281,6 @@ class SettingsWindow(QDialog):
         self.private_mode_cb.setChecked(app_config.memory.private_mode)
         layout.addWidget(self.private_mode_cb)
 
-        # Quantidade de memorias recuperadas
         topk_layout = QHBoxLayout()
         topk_layout.addWidget(QLabel("Quantidade de memórias contextuais recuperadas (Top-K):"))
         self.topk_spin = QSpinBox()
@@ -285,7 +290,6 @@ class SettingsWindow(QDialog):
         topk_layout.addStretch()
         layout.addLayout(topk_layout)
 
-        # Botao de Apagar Tudo
         clear_btn = QPushButton("Apagar Todas as Memórias Salvas")
         clear_btn.setProperty("class", "danger")
         clear_btn.clicked.connect(self._clear_all_memories)
@@ -311,14 +315,12 @@ class SettingsWindow(QDialog):
         layout = QVBoxLayout(tab)
         layout.setSpacing(12)
 
-        # Nome do Usuario
         user_layout = QHBoxLayout()
         user_layout.addWidget(QLabel("Seu Nome (como o Jarvis deve chamá-lo):"))
         self.user_name_input = QLineEdit(app_config.system.user_name)
         user_layout.addWidget(self.user_name_input)
         layout.addLayout(user_layout)
 
-        # Opcoes de Inicializacao e Tray
         self.startup_cb = QCheckBox("Iniciar JARVIS automaticamente com o Windows")
         self.startup_cb.setChecked(windows_platform.is_startup_enabled())
         layout.addWidget(self.startup_cb)
@@ -364,39 +366,31 @@ class SettingsWindow(QDialog):
         self.diag_output.clear()
         self.diag_output.append("=== DIAGNÓSTICO DO SISTEMA JARVIS ===\n")
         
-        # 1. Python
         import sys
         self.diag_output.append(f"Python ............... OK ({sys.version.split()[0]})")
 
-        # 2. Banco
         from app.memory.database import db
         conn = db.get_connection()
         self.diag_output.append("Database (SQLite) .... OK (WAL mode ativo)")
 
-        # 3. Microfone
         mics = microphone.list_input_devices()
         self.diag_output.append(f"Microfone ............ OK ({len(mics)} dispositivos encontrados)")
 
-        # 4. Alto-falante
         speakers = speaker.list_output_devices()
         self.diag_output.append(f"Alto-falante ......... OK ({len(speakers)} dispositivos encontrados)")
 
-        # 5. Camera
         cams = camera_capture.list_cameras()
         self.diag_output.append(f"Câmera ............... OK ({len(cams)} câmeras detectadas)")
 
-        # 6. IA Key
         key = secrets_manager.get_api_key(app_config.ai.provider)
         self.diag_output.append(f"Provedor IA .......... {app_config.ai.provider.upper()} ({'Chave Configurada' if key else 'Sem Chave'})")
 
-        # 7. Memoria
         mems = long_term_memory.list_memories(limit=5)
         self.diag_output.append(f"Memória Persistente .. OK ({len(mems)} memórias carregadas)")
 
         self.diag_output.append("\nSISTEMA PRONTO PARA OPERAÇÃO.")
 
     def _save_settings(self) -> None:
-        # Salva IA
         prov = self.ai_provider_combo.currentText().lower()
         key = self.api_key_input.text().strip()
         model = self.model_combo.currentText().strip()
@@ -404,31 +398,27 @@ class SettingsWindow(QDialog):
         if key:
             secrets_manager.set_api_key(prov, key)
         app_config.ai.provider = prov
-        app_config.ai.model = model
+        app_config.ai.model = model or "gpt-4o"
 
-        # Salva Audio
         app_config.audio.input_device_index = self.mic_combo.currentData()
         app_config.audio.output_device_index = self.speaker_combo.currentData()
+        app_config.audio.stt_engine = self.stt_engine_combo.currentData() or "local_whisper"
         app_config.audio.voice_mode = self.voice_mode_combo.currentData()
         app_config.audio.tts_rate = self.speed_slider.value()
 
-        # Salva Camera
         app_config.vision.camera_index = self.cam_combo.currentData() or 0
         app_config.vision.smart_scene_sampling = self.smart_scene_cb.isChecked()
         app_config.vision.ai_vision_fps = float(self.ai_fps_spin.value())
 
-        # Salva Memoria
         app_config.memory.enabled = self.memory_enabled_cb.isChecked()
         app_config.memory.private_mode = self.private_mode_cb.isChecked()
         app_config.memory.max_retrieval_count = self.topk_spin.value()
 
-        # Salva Sistema
         app_config.system.user_name = self.user_name_input.text().strip() or "Usuário"
         app_config.system.minimize_to_tray = self.tray_cb.isChecked()
         app_config.system.silent_mode = self.silent_cb.isChecked()
         app_config.system.allow_computer_automation = self.automation_cb.isChecked()
 
-        # Startup
         windows_platform.set_startup_with_windows(self.startup_cb.isChecked())
 
         app_config.save()

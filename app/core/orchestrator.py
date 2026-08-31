@@ -37,7 +37,6 @@ COMPORTAMENTO E PERSONALIDADE:
 - Seja direto ao ponto. Nao forneca tutoriais longos quando uma confirmacao simples bastar.
 """
 
-# Padroes de intencao visual que devem acionar a camera
 VISUAL_INTENT_PATTERNS = [
     re.compile(r"o que (?:voce esta|ta) (?:vendo|enxergando)", re.IGNORECASE),
     re.compile(r"o que (?:eu )?(?:estou|to) (?:segurando|mostrando)", re.IGNORECASE),
@@ -98,7 +97,6 @@ class JarvisOrchestrator:
         """Callback executado quando uma fala valida e transcrita."""
         text = event.data.get("text", "")
         if text:
-            # Agenda processamento assincrono da mensagem
             asyncio.run_coroutine_threadsafe(
                 self.process_user_message(text, from_voice=True),
                 self.get_event_loop()
@@ -133,6 +131,14 @@ class JarvisOrchestrator:
         state_machine.set_state(JarvisState.THINKING, "Processando mensagem")
         event_bus.publish(EventType.AI_RESPONSE_STARTED, {"prompt": clean_prompt})
 
+        # Se veio por voz, avisa a UI para exibir o balao da fala do usuario
+        if from_voice:
+            try:
+                from app.ui.components.signal_bridge import signal_bridge
+                signal_bridge.emit_user_message(clean_prompt)
+            except Exception:
+                pass
+
         # 1. Verifica Comandos Explicitos de Memoria ("Lembre que...", "Esqueca tudo...")
         explicit_memory_reply = memory_manager.handle_explicit_commands(clean_prompt)
         if explicit_memory_reply:
@@ -143,7 +149,6 @@ class JarvisOrchestrator:
         images_to_send: List[bytes] = []
         is_visual = False
 
-        # Verifica se e pergunta sobre a tela
         for pat in SCREEN_INTENT_PATTERNS:
             if pat.search(clean_prompt):
                 state_machine.set_state(JarvisState.WATCHING, "Capturando contexto da tela")
@@ -153,7 +158,6 @@ class JarvisOrchestrator:
                     is_visual = True
                 break
 
-        # Se nao foi tela, verifica se e pergunta sobre o que a camera esta vendo
         if not is_visual:
             for pat in VISUAL_INTENT_PATTERNS:
                 if pat.search(clean_prompt):
@@ -198,7 +202,6 @@ class JarvisOrchestrator:
                 exec_result = await tool_executor.execute(name=tc.name, arguments=tc.arguments)
                 event_bus.publish(EventType.TOOL_FINISHED, {"tool": tc.name, "result": exec_result})
 
-                # Prepara historico de resposta de ferramenta para reenviar a IA
                 result_str = str(exec_result.get("result") or exec_result.get("error"))
                 tool_results_history.append({
                     "role": "tool",
@@ -206,7 +209,6 @@ class JarvisOrchestrator:
                     "content": result_str
                 })
 
-            # Realiza segunda chamada para consolidar a resposta final da ferramenta
             extended_history = history + [
                 {"role": "user", "content": clean_prompt},
                 {"role": "assistant", "content": final_text, "tool_calls": [{"id": tc.id, "function": {"name": tc.name, "arguments": str(tc.arguments)}} for tc in response.tool_calls]}
@@ -228,11 +230,9 @@ class JarvisOrchestrator:
 
     def _finalize_turn(self, user_text: str, assistant_text: str, has_image: bool = False, from_voice: bool = False) -> None:
         """Grava a interacao na memoria e dispara voz do TTS se necessario."""
-        # Salva na sessao ativa em RAM
         self.session.add_turn(role="user", content=user_text, has_image=has_image)
         self.session.add_turn(role="assistant", content=assistant_text)
 
-        # Salva no gerenciador permanente de memoria (SQLite)
         memory_manager.record_turn(
             conversation_id=self.session.session_id,
             role="user",
@@ -247,7 +247,6 @@ class JarvisOrchestrator:
 
         event_bus.publish(EventType.AI_RESPONSE_FINISHED, {"text": assistant_text})
 
-        # Se a entrada veio por voz ou se o modo de voz estiver ativo (e nao silencioso): fala a resposta
         if from_voice or not app_config.system.silent_mode:
             audio_manager.speak_text(assistant_text)
         else:

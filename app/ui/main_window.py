@@ -1,6 +1,7 @@
 ﻿"""
 Janela Principal da Interface Grafica HUD do JARVIS.
 Integra o ORB animado, chat conversacional, visualizador de webcam, status de hardware e atalhos.
+Thread-safe via SignalBridge.
 """
 
 import asyncio
@@ -15,6 +16,7 @@ from app.ui.styles import HUD_DARK_STYLESHEET
 from app.ui.components.orb_widget import OrbWidget
 from app.ui.components.audio_visualizer import AudioVisualizerWidget
 from app.ui.components.status_bar import HardwareStatusBar
+from app.ui.components.signal_bridge import signal_bridge
 from app.ui.camera_widget import CameraWidget
 from app.ui.conversation_widget import ConversationWidget
 from app.ui.settings_window import SettingsWindow
@@ -23,7 +25,6 @@ from app.ui.history_window import HistoryWindow
 from app.ui.tray import JarvisTrayIcon, create_tray_icon
 from app.core.orchestrator import orchestrator
 from app.core.config import app_config
-from app.core.event_bus import event_bus, EventType, Event
 from app.core.state_machine import state_machine, JarvisState
 from app.audio.audio_manager import audio_manager
 from app.automation.screen_context import screen_context
@@ -154,18 +155,14 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.status_bar)
 
     def _setup_event_listeners(self) -> None:
-        """Conecta eventos do Event Bus com a interface."""
-        event_bus.subscribe(EventType.AI_RESPONSE_STARTED, self._on_ai_started)
-        event_bus.subscribe(EventType.AI_RESPONSE_FINISHED, self._on_ai_finished)
+        """Conecta eventos seguros via SignalBridge."""
+        signal_bridge.sig_message_received.connect(self._on_message_received)
+        signal_bridge.sig_audio_level.connect(self.vu_meter.set_level)
 
-    def _on_ai_started(self, event: Event) -> None:
-        prompt = event.data.get("prompt", "")
-        # A mensagem do usuário já é adicionada no _send_message, mas para voz adicionamos aqui
-        pass
-
-    def _on_ai_finished(self, event: Event) -> None:
-        text = event.data.get("text", "")
-        if text:
+    def _on_message_received(self, role: str, text: str) -> None:
+        """Recebe mensagens entregues com seguranca na GUI thread."""
+        # Se for do assistente, adiciona na conversa (as do usuario sao adicionadas ao enviar)
+        if role == "assistant":
             self.conversation.add_message(role="assistant", text=text)
 
     def _send_message(self) -> None:
