@@ -1,11 +1,11 @@
 ﻿"""
 Visualizador de Nivel de Microfone (VU Meter) para o JARVIS.
+Recebe atualizacoes de volume de forma thread-safe e renderiza barras animadas.
 """
 
 from PySide6.QtCore import Qt, QTimer, QRectF
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen
 from PySide6.QtWidgets import QWidget
-from app.core.event_bus import event_bus, EventType, Event
 
 
 class AudioVisualizerWidget(QWidget):
@@ -17,17 +17,17 @@ class AudioVisualizerWidget(QWidget):
         self.setMinimumWidth(120)
         self._level: float = 0.0
 
-        event_bus.subscribe(EventType.AUDIO_LEVEL_CHANGED, self._on_audio_level)
-
+        # Timer de decaimento suave
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._decay)
         self._timer.start(30)
 
-    def _on_audio_level(self, event: Event) -> None:
-        raw_rms = event.data.get("rms", 0.0)
-        norm = min(1.0, raw_rms * 15.0)
+    def set_level(self, rms: float) -> None:
+        """Define o nivel atual de volume vindo da SignalBridge na thread principal."""
+        norm = min(1.0, float(rms) * 15.0)
         if norm > self._level:
             self._level = norm
+            self.update()
 
     def _decay(self) -> None:
         if self._level > 0.01:
@@ -49,7 +49,6 @@ class AudioVisualizerWidget(QWidget):
         for i in range(bars):
             x = i * (bar_w + spacing)
             if i < active_bars:
-                # Gradiente verde -> ciano -> vermelho
                 if i < bars * 0.6:
                     color = QColor(0, 210, 255)
                 elif i < bars * 0.85:
