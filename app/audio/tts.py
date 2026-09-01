@@ -1,6 +1,6 @@
 ﻿"""
 Motor Hibrido de Sintese de Voz (Text-To-Speech) EXCLUSIVAMENTE MASCULINO para o JARVIS.
-Voz neural masculina de alta definicao acelerada (+25% speed) e interrupcao instantanea (<20ms).
+Voz neural masculina de alta definicao acelerada (+35% speed) e interrupcao instantanea (<20ms).
 """
 
 import asyncio
@@ -103,13 +103,13 @@ class LocalTTS:
                     pass
 
     def _speak_neural(self, text: str, voice_name: str) -> bool:
-        """Sintetiza voz neural masculina de alta velocidade via Edge-TTS (+25% rate)."""
+        """Sintetiza voz neural masculina acelerada via Edge-TTS (+35% rate)."""
         try:
             import edge_tts
 
             async def _generate():
-                # Acelera a fala em +25% para ritmo moderno e perspicaz
-                communicate = edge_tts.Communicate(text, voice_name, rate="+25%")
+                # Acelera a fala em +35% para um ritmo rápido, inteligente e moderno
+                communicate = edge_tts.Communicate(text, voice_name, rate="+35%")
                 audio_buffer = io.BytesIO()
                 async for chunk in communicate.stream():
                     if self._stop_requested:
@@ -147,11 +147,11 @@ class LocalTTS:
             return False
 
     def _speak_sapi5(self, text: str, voice_id: Optional[str] = None) -> None:
-        """Fallback offline nativo masculino via Windows SAPI5 (taxa acelerada)."""
+        """Fallback offline nativo masculino via Windows SAPI5 (taxa acelerada 240 wpm)."""
         pythoncom.CoInitialize()
         try:
             engine = pyttsx3.init("sapi5")
-            engine.setProperty("rate", 220)
+            engine.setProperty("rate", 240)
             engine.setProperty("volume", app_config.audio.tts_volume or 1.0)
 
             if voice_id and "HKEY" in voice_id:
