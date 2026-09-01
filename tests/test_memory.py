@@ -7,6 +7,7 @@ from app.memory.long_term import long_term_memory
 from app.memory.models import MemoryType
 from app.memory.retrieval import semantic_retrieval
 from app.memory.summarizer import memory_summarizer
+from app.core.config import app_config
 
 
 def test_add_and_retrieve_memory():
@@ -31,12 +32,13 @@ def test_add_and_retrieve_memory():
 
 
 def test_explicit_remember_and_forget_commands():
-    # Comando Lembre
-    action, reply = memory_summarizer.process_explicit_memory_command("Jarvis, lembre que meu nome é Thiago")
-    assert action == "remembered"
+    # Comando Lembre / Registro de Nome
+    action, reply = memory_summarizer.process_explicit_memory_command("Jarvis, meu nome é Thiago")
+    assert action == "name_registered"
     assert "Thiago" in reply
+    assert app_config.system.user_name == "Thiago"
 
-    # Verifica se foi gravado
+    # Verifica se foi gravado na memoria permanente
     mems = long_term_memory.list_memories(search_query="Thiago")
     assert len(mems) >= 1
 

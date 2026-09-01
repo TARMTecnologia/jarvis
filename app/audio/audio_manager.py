@@ -1,6 +1,6 @@
 ﻿"""
 Gerenciador Central do Subsistema de Audio e Voz do JARVIS.
-Integra Microfone, VAD, STT, Wake Word, TTS e Barge-in com o barramento de eventos.
+Integra Microfone, VAD, STT, Wake Word, TTS, Identificacao da Voz do Mentor e Barge-in com o barramento de eventos.
 """
 
 import threading
@@ -12,6 +12,7 @@ from app.audio.vad import vad_detector, VoiceActivityDetector
 from app.audio.wakeword import wake_word_detector, WakeWordDetector
 from app.audio.stt import local_stt, LocalSTT
 from app.audio.tts import local_tts, LocalTTS
+from app.audio.speaker_id import speaker_identifier, SpeakerIdentifier
 from app.core.event_bus import event_bus, EventType
 from app.core.state_machine import state_machine, JarvisState
 from app.core.config import app_config
@@ -21,7 +22,7 @@ logger = get_logger("audio.manager")
 
 
 class AudioManager:
-    """Coordenador completo do pipeline de voz local."""
+    """Coordenador completo do pipeline de voz local com identificação de speaker."""
 
     def __init__(self):
         self.microphone: MicrophoneManager = microphone
@@ -30,6 +31,7 @@ class AudioManager:
         self.wakeword: WakeWordDetector = wake_word_detector
         self.stt: LocalSTT = local_stt
         self.tts: LocalTTS = local_tts
+        self.speaker_id: SpeakerIdentifier = speaker_identifier
 
         self._is_active = False
         self._is_jarvis_speaking = False
@@ -65,7 +67,6 @@ class AudioManager:
 
     def _on_mic_frame(self, frame: np.ndarray, rms: float) -> None:
         """Recebe frames do microfone e alimenta VU Meter e VAD."""
-        # Publica nível de áudio para animação visual na UI
         event_bus.publish(EventType.AUDIO_LEVEL_CHANGED, {"rms": rms})
 
         # Se o Jarvis estiver falando e o usuário emitir um som alto: aciona Barge-In
@@ -73,7 +74,7 @@ class AudioManager:
             if app_config.audio.barge_in_enabled and rms > (app_config.audio.vad_sensitivity * 0.08):
                 logger.info("Voz detectada durante a fala do Jarvis. Acionando Barge-In!")
                 self.interrupt_speech()
-            return  # Suprime alimentação do VAD para não transcrever a própria voz do assistente
+            return
 
         self.vad.process_frame(frame, rms)
 
@@ -85,9 +86,8 @@ class AudioManager:
     def _on_user_speech_finish(self, audio_data: np.ndarray) -> None:
         """Disparado quando o usuário termina de falar."""
         event_bus.publish(EventType.USER_SPEECH_FINISHED)
-        state_machine.set_state(JarvisState.THINKING, "Processando transcrição local de fala")
+        state_machine.set_state(JarvisState.THINKING, "Processando fala")
 
-        # Transcreve o áudio em background para não travar a thread de áudio
         threading.Thread(
             target=self._process_transcription_worker,
             args=(audio_data,),
@@ -95,20 +95,28 @@ class AudioManager:
         ).start()
 
     def _process_transcription_worker(self, audio_data: np.ndarray) -> None:
-        """Executa a transcrição local e verifica Wake Word / Comandos de interrupção."""
+        """Executa verificacao da voz do mentor, transcrição local e ativacao."""
+        # 1. Filtro da Voz do Mentor (se ativado)
+        is_mentor, similarity = self.speaker_id.is_mentor_voice(audio_data)
+        if not is_mentor:
+            logger.info(f"Voz de terceiro ou ruído descartado (Similaridade: {similarity:.2f})")
+            state_machine.set_state(JarvisState.IDLE, "Voz não reconhecida como do mentor")
+            return
+
+        # 2. Transcrição STT
         text = self.stt.transcribe(audio_data)
         if not text:
             state_machine.set_state(JarvisState.IDLE, "Nenhuma fala compreendida")
             return
 
-        # Verifica se é um comando de parada
+        # 3. Comandos de parada (Barge-in verbal)
         if self.wakeword.is_stop_command(text):
             logger.info(f"Comando de parada recebido via voz: '{text}'")
             self.interrupt_speech()
             state_machine.set_state(JarvisState.IDLE, "Comando de parada")
             return
 
-        # Verifica ativação de acordo com o modo
+        # 4. Verifica ativação (Wake Word ou contínuo)
         activated, clean_prompt = self.wakeword.process_transcription(text)
 
         if activated:
@@ -120,7 +128,7 @@ class AudioManager:
             state_machine.set_state(JarvisState.IDLE, "Wake word nao detectada")
 
     def speak_text(self, text: str, on_finished: Optional[Callable[[], None]] = None) -> None:
-        """Fala a resposta do Jarvis usando TTS local de forma assíncrona."""
+        """Fala a resposta do Jarvis usando TTS local masculino de forma assíncrona."""
         if not text or not text.strip() or app_config.system.silent_mode:
             if on_finished:
                 on_finished()

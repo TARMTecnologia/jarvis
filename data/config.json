@@ -18,9 +18,11 @@
         "stt_model_size": "base",
         "tts_engine": "sapi5",
         "tts_voice_id": "pt-BR-FabioNeural",
-        "tts_rate": 190,
+        "tts_rate": 224,
         "tts_volume": 1.0,
-        "barge_in_enabled": true
+        "barge_in_enabled": true,
+        "mentor_voice_filter_enabled": false,
+        "mentor_voice_similarity_threshold": 0.55
     },
     "vision": {
         "camera_index": 0,
@@ -41,7 +43,7 @@
         "private_mode": false
     },
     "system": {
-        "user_name": "Usuário",
+        "user_name": "Senhor",
         "assistant_name": "JARVIS",
         "language": "pt-BR",
         "dark_theme": true,

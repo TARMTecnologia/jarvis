@@ -1,9 +1,10 @@
 ﻿"""
 Janela de Configuracoes Completas do JARVIS.
-Permite personalizar IA, Audio, Camera, Memoria, Sistema e executar testes de diagnostico de hardware.
+Permite personalizar IA, Audio, Voz Masculina, Identificacao do Mentor, Camera, Memoria e Sistema.
 """
 
 import asyncio
+import numpy as np
 from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -17,7 +18,9 @@ from app.ai.provider_factory import AIProviderFactory
 from app.audio.microphone import microphone
 from app.audio.speaker import speaker
 from app.audio.tts import local_tts
+from app.audio.speaker_id import speaker_identifier
 from app.vision.camera import camera_capture
+from app.vision.vision_manager import vision_manager
 from app.platform.windows import windows_platform
 from app.memory.long_term import long_term_memory
 from app.ui.styles import HUD_DARK_STYLESHEET
@@ -29,7 +32,7 @@ class SettingsWindow(QDialog):
     def __init__(self, parent: QWidget = None):
         super().__init__(parent)
         self.setWindowTitle("JARVIS — Configurações")
-        self.resize(760, 580)
+        self.resize(780, 600)
         self.setStyleSheet(HUD_DARK_STYLESHEET)
 
         main_layout = QVBoxLayout(self)
@@ -95,7 +98,7 @@ class SettingsWindow(QDialog):
         key_layout.addWidget(self.api_key_input)
         layout.addLayout(key_layout)
 
-        # Modelo (Editavel)
+        # Modelo
         model_layout = QHBoxLayout()
         model_layout.addWidget(QLabel("Modelo de IA (Selecione ou digite um customizado):"))
         self.model_combo = QComboBox()
@@ -195,11 +198,11 @@ class SettingsWindow(QDialog):
                 self.speaker_combo.setCurrentIndex(self.speaker_combo.count() - 1)
         layout.addWidget(self.speaker_combo)
 
-        # Voz do JARVIS (TTS)
-        layout.addWidget(QLabel("Voz do Assistente (Síntese TTS):"))
+        # Voz do JARVIS (Apenas Masculina)
+        layout.addWidget(QLabel("Voz Masculina do Assistente (Síntese TTS):"))
         self.voice_combo = QComboBox()
-        voices = local_tts.list_voices()
-        for v in voices:
+        male_voices = local_tts.list_voices()
+        for v in male_voices:
             self.voice_combo.addItem(v["name"], v["id"])
             if v["id"] == app_config.audio.tts_voice_id:
                 self.voice_combo.setCurrentIndex(self.voice_combo.count() - 1)
@@ -226,6 +229,11 @@ class SettingsWindow(QDialog):
                 self.voice_mode_combo.setCurrentIndex(i)
         layout.addWidget(self.voice_mode_combo)
 
+        # Identificacao da Voz do Mentor
+        self.mentor_voice_cb = QCheckBox("Identificação de Voz do Mentor (Filtrar e responder apenas à minha voz)")
+        self.mentor_voice_cb.setChecked(getattr(app_config.audio, "mentor_voice_filter_enabled", False))
+        layout.addWidget(self.mentor_voice_cb)
+
         # Velocidade TTS
         speed_layout = QHBoxLayout()
         speed_layout.addWidget(QLabel("Velocidade da Fala:"))
@@ -250,7 +258,8 @@ class SettingsWindow(QDialog):
         selected_vid = self.voice_combo.currentData()
         app_config.audio.tts_voice_id = selected_vid
         app_config.audio.tts_rate = self.speed_slider.value()
-        local_tts.speak("Olá! Sistemas de áudio online. Esta é a voz do Jarvis.")
+        mentor_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Senhor"
+        local_tts.speak(f"Olá {mentor_name}! Todos os sistemas de áudio e voz masculina estão operacionais.")
 
     # 3. ABA CAMERA
     def _create_vision_tab(self) -> None:
@@ -267,7 +276,7 @@ class SettingsWindow(QDialog):
                 self.cam_combo.setCurrentIndex(self.cam_combo.count() - 1)
         layout.addWidget(self.cam_combo)
 
-        self.smart_scene_cb = QCheckBox("Amostragem inteligente (enviar frames apenas quando houver mudança de cena)")
+        self.smart_scene_cb = QCheckBox("Amostragem inteligente (enviar frames apenas quando houver mudança visual)")
         self.smart_scene_cb.setChecked(app_config.vision.smart_scene_sampling)
         layout.addWidget(self.smart_scene_cb)
 
@@ -280,8 +289,26 @@ class SettingsWindow(QDialog):
         fps_layout.addStretch()
         layout.addLayout(fps_layout)
 
+        test_cam_layout = QHBoxLayout()
+        self.test_cam_btn = QPushButton("Testar Captura da Câmera Agora")
+        self.test_cam_btn.clicked.connect(self._test_camera_capture)
+        self.cam_status_lbl = QLabel("")
+        test_cam_layout.addWidget(self.test_cam_btn)
+        test_cam_layout.addWidget(self.cam_status_lbl)
+        test_cam_layout.addStretch()
+        layout.addLayout(test_cam_layout)
+
         layout.addStretch()
         self.tabs.addTab(tab, "Câmera e Visão")
+
+    def _test_camera_capture(self) -> None:
+        frame = camera_capture.capture_frame_sync(self.cam_combo.currentData() or 0)
+        if frame is not None:
+            self.cam_status_lbl.setText("● Câmera OK! Frame capturado.")
+            self.cam_status_lbl.setStyleSheet("color: #10b981;")
+        else:
+            self.cam_status_lbl.setText("Falha ao abrir câmera.")
+            self.cam_status_lbl.setStyleSheet("color: #ef4444;")
 
     # 4. ABA MEMORIA
     def _create_memory_tab(self) -> None:
@@ -289,7 +316,7 @@ class SettingsWindow(QDialog):
         layout = QVBoxLayout(tab)
         layout.setSpacing(14)
 
-        self.memory_enabled_cb = QCheckBox("Habilitar memória semântica persistente")
+        self.memory_enabled_cb = QCheckBox("Habilitar memória semântica e sólida persistente")
         self.memory_enabled_cb.setChecked(app_config.memory.enabled)
         layout.addWidget(self.memory_enabled_cb)
 
@@ -332,8 +359,9 @@ class SettingsWindow(QDialog):
         layout.setSpacing(12)
 
         user_layout = QHBoxLayout()
-        user_layout.addWidget(QLabel("Seu Nome (como o Jarvis deve chamá-lo):"))
-        self.user_name_input = QLineEdit(app_config.system.user_name)
+        user_layout.addWidget(QLabel("Nome do Mentor (Como o Jarvis deve chamá-lo):"))
+        current_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Senhor"
+        self.user_name_input = QLineEdit(current_name)
         user_layout.addWidget(self.user_name_input)
         layout.addLayout(user_layout)
 
@@ -345,7 +373,7 @@ class SettingsWindow(QDialog):
         self.tray_cb.setChecked(app_config.system.minimize_to_tray)
         layout.addWidget(self.tray_cb)
 
-        self.silent_cb = QCheckBox("Modo Silencioso (respostas apenas por texto, sem voz TTS)")
+        self.silent_cb = QCheckBox("Modo Silencioso (respostas apenas por texto, sem TTS)")
         self.silent_cb.setChecked(app_config.system.silent_mode)
         layout.addWidget(self.silent_cb)
 
@@ -422,6 +450,7 @@ class SettingsWindow(QDialog):
             app_config.audio.tts_voice_id = self.voice_combo.currentData()
         app_config.audio.stt_engine = self.stt_engine_combo.currentData() or "local_whisper"
         app_config.audio.voice_mode = self.voice_mode_combo.currentData()
+        app_config.audio.mentor_voice_filter_enabled = self.mentor_voice_cb.isChecked()
         app_config.audio.tts_rate = self.speed_slider.value()
 
         app_config.vision.camera_index = self.cam_combo.currentData() or 0
@@ -432,7 +461,7 @@ class SettingsWindow(QDialog):
         app_config.memory.private_mode = self.private_mode_cb.isChecked()
         app_config.memory.max_retrieval_count = self.topk_spin.value()
 
-        app_config.system.user_name = self.user_name_input.text().strip() or "Usuário"
+        app_config.system.user_name = self.user_name_input.text().strip() or "Senhor"
         app_config.system.minimize_to_tray = self.tray_cb.isChecked()
         app_config.system.silent_mode = self.silent_cb.isChecked()
         app_config.system.allow_computer_automation = self.automation_cb.isChecked()

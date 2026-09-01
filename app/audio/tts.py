@@ -1,6 +1,6 @@
 ﻿"""
-Motor Hibrido de Sintese de Voz (Text-To-Speech) para o JARVIS.
-Utiliza vozes neurais de alta definicao (Edge-TTS Masculino pt-BR-Antonio / pt-BR-Fabio) com fallback offline para SAPI5.
+Motor Hibrido de Sintese de Voz (Text-To-Speech) EXCLUSIVAMENTE MASCULINO para o JARVIS.
+Utiliza vozes neurais masculinas de alta definicao (Edge-TTS pt-BR-Antonio / pt-BR-Fabio) com fallback offline para vozes masculinas SAPI5 (Microsoft Daniel).
 """
 
 import asyncio
@@ -17,50 +17,55 @@ from app.core.logging_config import get_logger
 
 logger = get_logger("audio.tts")
 
-DEFAULT_NEURAL_MALE_VOICE = "pt-BR-AntonioNeural"
+DEFAULT_MALE_NEURAL_VOICE = "pt-BR-AntonioNeural"
 
 
 class LocalTTS:
-    """Motor de síntese de voz com suporte a voz neural masculina e fallback offline nativo."""
+    """Motor de síntese de voz 100% masculino para o JARVIS."""
 
     def __init__(self):
         self._lock = threading.Lock()
         self._is_speaking = False
         self._stop_requested = False
-        self._current_stream = None
+
+        # Garante que a voz configurada seja masculina
+        if not app_config.audio.tts_voice_id or "maria" in app_config.audio.tts_voice_id.lower() or "francisca" in app_config.audio.tts_voice_id.lower():
+            app_config.audio.tts_voice_id = DEFAULT_MALE_NEURAL_VOICE
+            app_config.save()
 
     def list_voices(self) -> List[Dict[str, Any]]:
-        """Lista todas as vozes neurais e nativas disponiveis."""
-        voices = [
-            {"id": "pt-BR-AntonioNeural", "name": "JARVIS Neural Masculino (Antonio - PT-BR)", "gender": "Masculino"},
-            {"id": "pt-BR-FabioNeural", "name": "JARVIS Neural Masculino (Fábio - PT-BR)", "gender": "Masculino"},
-            {"id": "pt-BR-FranciscaNeural", "name": "JARVIS Neural Feminino (Francisca - PT-BR)", "gender": "Feminino"},
-            {"id": "en-US-GuyNeural", "name": "JARVIS Neural Masculino (Guy - EN-US)", "gender": "Masculino"},
-            {"id": "en-US-ChristopherNeural", "name": "JARVIS Neural Masculino (Christopher - EN-US)", "gender": "Masculino"},
+        """Lista EXCLUSIVAMENTE vozes masculinas disponiveis no sistema e neurais."""
+        male_voices = [
+            {"id": "pt-BR-AntonioNeural", "name": "JARVIS Neural — Antonio (Masculino PT-BR Principal)", "gender": "Masculino"},
+            {"id": "pt-BR-FabioNeural", "name": "JARVIS Neural — Fábio (Masculino PT-BR Alternativo)", "gender": "Masculino"},
+            {"id": "en-US-GuyNeural", "name": "JARVIS Neural — Guy (Masculino EN-US)", "gender": "Masculino"},
+            {"id": "en-US-ChristopherNeural", "name": "JARVIS Neural — Christopher (Masculino EN-US)", "gender": "Masculino"},
         ]
 
-        # Adiciona vozes locais do Windows SAPI5
+        # Busca vozes locais SAPI5 e filtra estritamente por masculinas
         pythoncom.CoInitialize()
         try:
             engine = pyttsx3.init("sapi5")
             for v in engine.getProperty("voices"):
-                gender = "Masculino" if "david" in v.name.lower() or "daniel" in v.name.lower() else "Feminino"
-                voices.append({
-                    "id": v.id,
-                    "name": f"{v.name} (SAPI5 Local)",
-                    "gender": gender
-                })
+                vname = v.name.lower()
+                vid = v.id.lower()
+                # Apenas vozes reconhecidamente masculinas
+                if any(m in vname or m in vid for m in ["daniel", "david", "mark", "george", "pablo", "paul", "stefan"]):
+                    male_voices.append({
+                        "id": v.id,
+                        "name": f"{v.name} (Masculino SAPI5 Local)",
+                        "gender": "Masculino"
+                    })
         except Exception as e:
             logger.debug(f"Aviso ao consultar vozes SAPI5: {e}")
         finally:
             pythoncom.CoUninitialize()
 
-        return voices
+        return male_voices
 
     def speak(self, text: str, on_start: Optional[Callable[[], None]] = None, on_end: Optional[Callable[[], None]] = None) -> None:
         """
         Sintetiza e reproduz o texto com voz masculina.
-        Tenta primeiro síntese neural; se falhar ou offline, usa SAPI5.
         """
         clean_text = text.strip()
         if not clean_text or app_config.system.silent_mode:
@@ -78,12 +83,15 @@ class LocalTTS:
             except Exception:
                 pass
 
-        selected_voice = app_config.audio.tts_voice_id or DEFAULT_NEURAL_MALE_VOICE
-        # Se o ID configurado for uma voz neural (ou padrao)
+        selected_voice = app_config.audio.tts_voice_id or DEFAULT_MALE_NEURAL_VOICE
+        # Garante que não use voz feminina
+        if "maria" in selected_voice.lower() or "francisca" in selected_voice.lower():
+            selected_voice = DEFAULT_MALE_NEURAL_VOICE
+
         if "Neural" in selected_voice or "pt-BR" in selected_voice:
             success = self._speak_neural(clean_text, selected_voice)
             if not success and not self._stop_requested:
-                logger.info("Tentando fallback para SAPI5 local...")
+                logger.info("Tentando fallback para SAPI5 local masculino...")
                 self._speak_sapi5(clean_text)
         else:
             self._speak_sapi5(clean_text, selected_voice)
@@ -98,7 +106,7 @@ class LocalTTS:
                 pass
 
     def _speak_neural(self, text: str, voice_name: str) -> bool:
-        """Sintetiza voz neural de alta definicao via Edge-TTS."""
+        """Sintetiza voz neural masculina de alta definicao via Edge-TTS."""
         try:
             import edge_tts
 
@@ -124,11 +132,9 @@ class LocalTTS:
             if self._stop_requested:
                 return True
 
-            # Reproduz no dispositivo de audio configurado
             dev_idx = app_config.audio.output_device_index
             sounddevice.play(data, samplerate=sr, device=dev_idx)
             
-            # Aguarda termino respeitando interrupcao
             while sounddevice.get_stream() and sounddevice.get_stream().active:
                 if self._stop_requested:
                     sounddevice.stop()
@@ -142,7 +148,7 @@ class LocalTTS:
             return False
 
     def _speak_sapi5(self, text: str, voice_id: Optional[str] = None) -> None:
-        """Fallback offline nativo via Windows SAPI5."""
+        """Fallback offline nativo masculino via Windows SAPI5."""
         pythoncom.CoInitialize()
         try:
             engine = pyttsx3.init("sapi5")

@@ -1,6 +1,6 @@
 ﻿"""
-Captura de Webcam via OpenCV com DirectShow para o JARVIS.
-Opera em thread dedicada desacoplando a taxa de quadros do preview da inferencia de IA.
+Captura de Webcam via OpenCV com Suporte Multi-Backend Resiliente para o JARVIS.
+Suporta captura continua desacoplada para a UI e captura instantanea sob demanda para a IA.
 """
 
 import time
@@ -15,7 +15,7 @@ logger = get_logger("vision.camera")
 
 
 class CameraCapture:
-    """Thread de captura contínua de frames da webcam."""
+    """Thread de captura contínua e síncrona de frames da webcam."""
 
     def __init__(self):
         self._cap: Optional[cv2.VideoCapture] = None
@@ -26,24 +26,38 @@ class CameraCapture:
         self._callbacks: List[Callable[[np.ndarray], None]] = []
 
     @staticmethod
-    def list_cameras(max_tested: int = 4) -> List[Dict[str, Any]]:
-        """Lista câmeras de vídeo disponíveis no sistema via DirectShow."""
+    def _open_capture_device(index: int) -> Optional[cv2.VideoCapture]:
+        """Tenta abrir a câmera testando backends compatíveis do Windows (Padrão, MSMF e DSHOW)."""
+        backends = [None, cv2.CAP_MSMF, cv2.CAP_DSHOW]
+        for b in backends:
+            try:
+                cap = cv2.VideoCapture(index, b) if b is not None else cv2.VideoCapture(index)
+                if cap is not None and cap.isOpened():
+                    ret, _ = cap.read()
+                    if ret:
+                        return cap
+                    cap.release()
+            except Exception:
+                pass
+        return None
+
+    @staticmethod
+    def list_cameras(max_tested: int = 3) -> List[Dict[str, Any]]:
+        """Lista câmeras de vídeo funcionais disponíveis no sistema."""
         available = []
         for index in range(max_tested):
             try:
-                cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-                if cap.isOpened():
-                    ret, _ = cap.read()
-                    if ret:
-                        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                        available.append({
-                            "index": index,
-                            "name": f"Camera {index} ({w}x{h})"
-                        })
+                cap = CameraCapture._open_capture_device(index)
+                if cap is not None and cap.isOpened():
+                    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
+                    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
+                    available.append({
+                        "index": index,
+                        "name": f"Camera {index} ({w}x{h})"
+                    })
                     cap.release()
             except Exception as e:
-                logger.debug(f"Erro ao testar camera {index}: {e}")
+                logger.debug(f"Erro ao listar camera {index}: {e}")
         return available
 
     def start(self, camera_index: Optional[int] = None) -> bool:
@@ -55,16 +69,15 @@ class CameraCapture:
             idx = camera_index if camera_index is not None else app_config.vision.camera_index
 
             try:
-                self._cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-                if not self._cap.isOpened():
-                    # Tenta sem CAP_DSHOW como fallback
-                    self._cap = cv2.VideoCapture(idx)
+                self._cap = self._open_capture_device(idx)
+                if self._cap is None:
+                    if idx != 0:
+                        self._cap = self._open_capture_device(0)
 
-                if not self._cap.isOpened():
+                if self._cap is None or not self._cap.isOpened():
                     logger.warning(f"Não foi possível abrir a câmera índice {idx}.")
                     return False
 
-                # Configura resolução
                 self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, app_config.vision.resolution_width)
                 self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, app_config.vision.resolution_height)
 
@@ -126,6 +139,32 @@ class CameraCapture:
             if self._current_frame is not None:
                 return self._current_frame.copy()
         return None
+
+    def capture_frame_sync(self, camera_index: Optional[int] = None) -> Optional[np.ndarray]:
+        """Captura um frame instantâneo de forma síncrona com auto-exposição garantida."""
+        latest = self.get_latest_frame()
+        if latest is not None:
+            return latest
+
+        idx = camera_index if camera_index is not None else app_config.vision.camera_index
+        cap = self._open_capture_device(idx) or self._open_capture_device(0)
+        if cap is None:
+            return None
+
+        try:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, app_config.vision.resolution_width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, app_config.vision.resolution_height)
+            
+            frame = None
+            for _ in range(4):
+                ret, f = cap.read()
+                if ret and f is not None:
+                    frame = f
+                time.sleep(0.05)
+
+            return frame
+        finally:
+            cap.release()
 
     def add_callback(self, callback: Callable[[np.ndarray], None]) -> None:
         if callback not in self._callbacks:

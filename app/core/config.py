@@ -92,6 +92,8 @@ class AudioSettings(BaseModel):
     tts_rate: int = Field(default=190, ge=100, le=300, description="Velocidade da fala (palavras por minuto)")
     tts_volume: float = Field(default=1.0, ge=0.0, le=1.0, description="Volume da fala")
     barge_in_enabled: bool = Field(default=True, description="Permitir interromper fala do Jarvis")
+    mentor_voice_filter_enabled: bool = Field(default=False, description="Filtrar e aceitar apenas a voz calibrada do mentor")
+    mentor_voice_similarity_threshold: float = Field(default=0.55, ge=0.2, le=0.95, description="Limiar de similaridade vocal")
 
 
 class VisionSettings(BaseModel):
@@ -123,7 +125,7 @@ class MemorySettings(BaseModel):
 
 class SystemSettings(BaseModel):
     """Configuracoes gerais do sistema e interface."""
-    user_name: str = Field(default="Usuário", description="Nome como o assistente deve chamar o usuario")
+    user_name: str = Field(default="Senhor", description="Nome como o assistente deve chamar o mentor")
     assistant_name: str = Field(default="JARVIS", description="Nome do assistente")
     language: str = Field(default="pt-BR", description="Idioma padrao")
     dark_theme: bool = Field(default=True, description="Tema escuro HUD")

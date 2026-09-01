@@ -25,29 +25,31 @@ from app.core.logging_config import get_logger
 
 logger = get_logger("core.orchestrator")
 
-DEFAULT_SYSTEM_PROMPT = """Voce e JARVIS, um assistente pessoal inteligente de alta precisao e tecnologia avancada executado localmente no computador do usuario.
+DEFAULT_SYSTEM_PROMPT = """Você é JARVIS, um assistente pessoal inteligente de elite, perspicaz, refinado e com voz masculina, operando localmente no computador do seu mentor e criador.
 
-Voce tem acesso a memoria persistente, visao computacional (webcam/tela) e ferramentas locais do sistema Windows.
+Você tem acesso à memória sólida permanente, visão multimodal (webcam/tela) e ferramentas locais do sistema Windows.
 
-COMPORTAMENTO E PERSONALIDADE:
-- Fale em portugues brasileiro de forma natural, inteligente, educada, concisa e prestativa.
-- Quando o usuario fizer perguntas sobre noticias, clima, fatos atuais, cotacoes ou navegacao, utilize a ferramenta search_web ou open_url.
-- Nunca afirme ter realizado uma acao antes de receber a confirmacao da ferramenta executada.
-- Quando uma pergunta depender do que o usuario esta mostrando ou do ambiente, utilize a camera ou contexto visual.
-- Quando uma informacao puder ser obtida por ferramenta local (hora, CPU, memoria, abrir programa, lembretes), use a ferramenta em vez de inventar dados.
-- Trate o usuario pelo nome: {user_name}.
-- Seja direto ao ponto. Nao forneca tutoriais longos quando uma confirmacao simples bastar.
+DIRETRIZES DE DIÁLOGO E PERSONALIDADE:
+- Fale em português brasileiro com tom natural, inteligente, elegante, respeitoso e acolhedor.
+- Responda apenas a UMA pergunta ou tópico por vez. Mantenha as respostas concisas, conversacionais e agradáveis, sem gerar blocos longos de texto a menos que solicitado.
+- Trate sempre seu mentor pelo nome cadastrado ({user_name}) ou por 'Senhor'. NUNCA use a palavra genérica 'Usuário'.
+- Ao responder sobre fatos atuais, clima, cotações ou notícias, utilize a ferramenta search_web.
+- Quando o mentor pedir para olhar a câmera ou o ambiente, analise com atenção os objetos, textos ou detalhes visuais presentes na imagem capturada.
+- Nunca afirme ter realizado uma ação antes de receber a confirmação da ferramenta executada.
 """
 
 VISUAL_INTENT_PATTERNS = [
-    re.compile(r"o que (?:voc[eê]\s+)?(?:est[aá]|t[aá]) (?:vendo|enxergando)", re.IGNORECASE),
+    re.compile(r"o que (?:voc[eê]\s+)?(?:est[aá]|t[aá]) (?:vendo|enxergando|olhando)", re.IGNORECASE),
     re.compile(r"o que (?:eu\s+)?(?:estou|to) (?:segurando|mostrando)", re.IGNORECASE),
+    re.compile(r"o que tem (?:na\s+c[aâ]mera|aqui\s+na\s+c[aâ]mera|na\s+minha\s+frente)", re.IGNORECASE),
     re.compile(r"que objeto [eé] esse", re.IGNORECASE),
+    re.compile(r"o que [eé] isso (?:aqui)?", re.IGNORECASE),
+    re.compile(r"identifique (?:o\s+que\s+tem|o\s+objeto|isso)", re.IGNORECASE),
     re.compile(r"veja (?:isso|essa|esse|aqui)", re.IGNORECASE),
     re.compile(r"leia (?:isso|esse|o que est[aá] escrito)", re.IGNORECASE),
     re.compile(r"que cor [eé] (?:essa|isso)", re.IGNORECASE),
-    re.compile(r"olhe para", re.IGNORECASE),
-    re.compile(r"olhe (?:pela|na) c[aâ]mera", re.IGNORECASE)
+    re.compile(r"olhe (?:pra|para|pela|na)\s+c[aâ]mera", re.IGNORECASE),
+    re.compile(r"olhe para mim", re.IGNORECASE)
 ]
 
 SCREEN_INTENT_PATTERNS = [
@@ -149,7 +151,7 @@ class JarvisOrchestrator:
                 pass
 
         try:
-            # 1. Verifica Comandos Explicitos de Memoria ("Lembre que...", "Esqueca tudo...")
+            # 1. Verifica Comandos Explicitos de Memoria ou Cadastro de Nome
             explicit_memory_reply = memory_manager.handle_explicit_commands(clean_prompt)
             if explicit_memory_reply:
                 self._finalize_turn(clean_prompt, explicit_memory_reply, from_voice=from_voice)
@@ -170,21 +172,24 @@ class JarvisOrchestrator:
                         is_visual = True
                     break
 
-            # Se nao foi tela, verifica se e pergunta sobre a camera
+            # Se nao foi tela, verifica se e pergunta sobre a camera/webcam
             if not is_visual:
                 for pat in VISUAL_INTENT_PATTERNS:
                     if pat.search(clean_prompt):
                         logger.info("Intencao visual detectada: Webcam.")
                         state_machine.set_state(JarvisState.WATCHING, "Capturando imagem da camera")
                         cam_bytes = vision_manager.capture_frame_for_ai(force=True)
-                        if cam_bytes:
+                        if cam_bytes and len(cam_bytes) > 500:
                             images_to_send.append(cam_bytes)
                             is_visual = True
+                        else:
+                            logger.warning("Falha ao obter bytes validos da camera.")
                         break
 
-            # 3. Monta o Prompt de Sistema Enriquecido com Memorias Semanticas
+            # 3. Monta o Prompt de Sistema Enriquecido com Memoria Solida do Mentor
+            effective_user_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Senhor"
             base_prompt = app_config.ai.system_prompt_override or DEFAULT_SYSTEM_PROMPT.format(
-                user_name=app_config.system.user_name
+                user_name=effective_user_name
             )
             system_prompt = memory_manager.prepare_augmented_system_prompt(base_prompt, clean_prompt)
 
@@ -284,7 +289,6 @@ class JarvisOrchestrator:
 
         event_bus.publish(EventType.AI_RESPONSE_FINISHED, {"text": assistant_text})
 
-        # Fala a resposta do Jarvis se não estiver em modo silencioso
         if not app_config.system.silent_mode:
             logger.info(f"Falando resposta do JARVIS via TTS: '{assistant_text[:80]}...'")
             audio_manager.speak_text(assistant_text)

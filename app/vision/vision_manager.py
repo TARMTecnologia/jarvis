@@ -69,29 +69,23 @@ class VisionManager:
 
     def capture_frame_for_ai(self, force: bool = False) -> Optional[bytes]:
         """
-        Captura um frame comprimido em JPEG para envio a IA.
-        Aplica controle de taxa (ai_vision_fps) e deteccao de mudanca de cena para economizar tokens.
+        Captura um frame comprimido em JPEG para envio a IA com garantia de leitura síncrona.
         """
-        if not self._is_camera_active:
-            # Tenta ligar temporariamente se a camera estiver desligada
-            if not self.start_camera():
-                return None
-
         frame = self.camera.get_latest_frame()
         if frame is None:
-            time.sleep(0.1)
-            frame = self.camera.get_latest_frame()
-            if frame is None:
-                return None
+            # Captura síncrona com fallback
+            frame = self.camera.capture_frame_sync()
+
+        if frame is None:
+            logger.warning("Falha ao obter frame da câmera para a IA.")
+            return None
 
         now = time.time()
         min_interval = 1.0 / max(0.1, app_config.vision.ai_vision_fps)
 
         if not force and (now - self._last_ai_frame_time) < min_interval:
-            # Respeita o limite de FPS da IA
             return None
 
-        # Se amostragem inteligente estiver ativada, verifica se a cena mudou
         if not force and app_config.vision.smart_scene_sampling:
             changed, _ = self.scene.has_scene_changed(frame)
             if not changed:
@@ -110,16 +104,12 @@ class VisionManager:
             quality=app_config.vision.jpeg_quality
         )
 
-        logger.info(f"Frame capturado para IA ({len(jpeg_bytes) if jpeg_bytes else 0} bytes).")
+        logger.info(f"Frame de câmera capturado com sucesso para IA ({len(jpeg_bytes) if jpeg_bytes else 0} bytes).")
         return jpeg_bytes
 
     def take_photo(self, save_to_desktop: bool = True) -> Dict[str, Any]:
         """Tira uma foto em alta definicao com a camera e salva em arquivo se solicitado."""
-        if not self._is_camera_active:
-            self.start_camera()
-            time.sleep(0.3)  # Aguarda auto-exposicao da camera
-
-        frame = self.camera.get_latest_frame()
+        frame = self.camera.get_latest_frame() or self.camera.capture_frame_sync()
         if frame is None:
             return {"status": "error", "error": "Nao foi possivel capturar imagem da camera."}
 
@@ -148,7 +138,6 @@ class VisionManager:
 vision_manager = VisionManager()
 
 
-# Registro de Ferramenta Local para IA
 @tool(
     name="take_photo",
     description="Tira uma foto usando a webcam do computador e salva na Area de Trabalho do usuario.",
