@@ -1,4 +1,4 @@
-﻿"""
+"""
 Gerenciador Central do Subsistema de Audio e Voz do JARVIS.
 Integra Microfone, VAD, STT, Wake Word, TTS, Identificacao do Mentor, Deteccao de Eco e Modo Ditado.
 """
@@ -101,12 +101,13 @@ class AudioManager:
 
     def _process_transcription_worker(self, audio_data: np.ndarray) -> None:
         """Executa verificacao da voz do mentor, transcrição local, filtro de eco e ditado."""
-        # 1. Filtro da Voz do Mentor (Speaker ID)
-        is_mentor, similarity = self.speaker_id.is_mentor_voice(audio_data)
-        if not is_mentor:
-            logger.info(f"Voz de terceiro ou ruído descartado (Similaridade: {similarity:.2f})")
-            state_machine.set_state(JarvisState.IDLE, "Voz não reconhecida como do mentor")
-            return
+        # 1. Filtro da Voz do Mentor (Speaker ID - apenas quando ativado nas configuracoes)
+        if getattr(app_config.audio, "mentor_voice_filter_enabled", False):
+            is_mentor, similarity = self.speaker_id.is_mentor_voice(audio_data)
+            if not is_mentor:
+                logger.info(f"Voz de terceiro ou ruído descartado (Similaridade: {similarity:.2f})")
+                state_machine.set_state(JarvisState.IDLE, "Voz não reconhecida como do mentor")
+                return
 
         # 2. Transcrição STT
         text = self.stt.transcribe(audio_data)

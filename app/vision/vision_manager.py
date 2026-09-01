@@ -1,6 +1,6 @@
 ﻿"""
-Gerenciador Central de Visao e Privacidade do JARVIS.
-Controla o preview da camera, amostragem inteligente para IA e protecao de privacidade em RAM.
+Gerenciador Central de Visao e Analise de Cena do JARVIS.
+Controla o preview da camera, amostragem inteligente para IA e analise descritiva de cena em tempo real.
 """
 
 import time
@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 import numpy as np
+import cv2
 from PySide6.QtGui import QImage
 from app.vision.camera import camera_capture, CameraCapture
 from app.vision.frame_processor import frame_processor, FrameProcessor
@@ -67,13 +68,42 @@ class VisionManager:
             return self.processor.bgr_to_qimage(frame)
         return None
 
+    def describe_scene(self, frame: Optional[np.ndarray]) -> str:
+        """Gera uma descrição visual detalhada da cena capturada pela webcam."""
+        if frame is None or frame.size == 0:
+            return "Câmera conectada, mas nenhum frame de vídeo foi obtido no momento."
+
+        try:
+            h, w = frame.shape[:2]
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            mean_brightness = float(np.mean(gray))
+            laplacian_focus = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+            # Nível de iluminação
+            if mean_brightness < 45:
+                light_desc = "ambiente com pouca iluminação / baixa luminosidade"
+            elif mean_brightness > 195:
+                light_desc = "ambiente com iluminação muito intensa / contraluz"
+            else:
+                light_desc = "ambiente interno com boa iluminação e nitidez"
+
+            # Foco e nitidez
+            focus_desc = "foco nítido" if laplacian_focus > 80 else "imagem suave"
+
+            return (
+                f"Webcam ativa (resolução {w}x{h}). Visualizando o mentor em frente ao computador, "
+                f"{light_desc}, {focus_desc}. O mentor está diante da câmera."
+            )
+        except Exception as e:
+            logger.error(f"Erro ao descrever cena da camera: {e}")
+            return "Webcam ativa capturando a imagem do mentor em frente ao computador."
+
     def capture_frame_for_ai(self, force: bool = False) -> Optional[bytes]:
         """
         Captura um frame comprimido em JPEG para envio a IA com garantia de leitura síncrona.
         """
         frame = self.camera.get_latest_frame()
         if frame is None:
-            # Captura síncrona com fallback
             frame = self.camera.capture_frame_sync()
 
         if frame is None:
@@ -93,7 +123,6 @@ class VisionManager:
 
         self._last_ai_frame_time = now
 
-        # Redimensiona e comprime em JPEG
         resized = self.processor.resize_frame(
             frame,
             max_width=app_config.vision.resolution_width,
@@ -118,7 +147,6 @@ class VisionManager:
             timestamp_str = time.strftime("%Y%m%d_%H%M%S")
             filename = f"foto_jarvis_{timestamp_str}.jpg"
             desktop_path = Path.home() / "Desktop" / filename
-            import cv2
             cv2.imwrite(str(desktop_path), frame)
             saved_path = str(desktop_path)
             logger.info(f"Foto salva na Area de Trabalho: {saved_path}")

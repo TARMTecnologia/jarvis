@@ -1,11 +1,13 @@
 ﻿"""
 Orquestrador Central do JARVIS.
 Coordena a integracao completa entre Audio, Visao, Memoria, Provedores de IA (Nuvem e Ollama Local), Ferramentas e Interface.
+Thread de event loop permanente blindada contra erros assincronos.
 """
 
 import asyncio
 import json
 import re
+import threading
 import time
 from typing import Optional, List, Dict, Any
 from app.core.config import app_config
@@ -16,6 +18,7 @@ from app.ai.provider_factory import AIProviderFactory
 from app.ai.base_provider import AIProvider, AIResponse
 from app.memory.memory_manager import memory_manager
 from app.audio.audio_manager import audio_manager
+from app.vision.camera import camera_capture
 from app.vision.vision_manager import vision_manager
 from app.automation.screen_context import screen_context
 from app.automation.dictation import dictation_manager
@@ -42,7 +45,7 @@ DIRETRIZES DE DIÁLOGO E TOM ADAPTATIVO:
 - Trate sempre seu mentor pelo nome cadastrado ({user_name}) ou por 'Senhor'. NUNCA use a palavra genérica 'Usuário'.
 - Ao responder sobre clima ou temperatura, use a ferramenta get_weather.
 - Ao responder sobre fatos atuais, cotações ou notícias, use a ferramenta search_web.
-- Quando o mentor pedir para olhar a câmera ou o ambiente, analise com atenção os objetos, textos ou detalhes visuais presentes na imagem capturada.
+- Quando o mentor perguntar sobre a câmera ou o que você está vendo, descreva com clareza os detalhes visuais informados.
 - Nunca afirme ter realizado uma ação antes de receber a confirmação da ferramenta executada.
 """
 
@@ -57,7 +60,8 @@ VISUAL_INTENT_PATTERNS = [
     re.compile(r"leia (?:isso|esse|o que est[aá] escrito)", re.IGNORECASE),
     re.compile(r"que cor [eé] (?:essa|isso)", re.IGNORECASE),
     re.compile(r"olhe (?:pra|para|pela|na)\s+c[aâ]mera", re.IGNORECASE),
-    re.compile(r"olhe para mim", re.IGNORECASE)
+    re.compile(r"olhe para mim", re.IGNORECASE),
+    re.compile(r"descreva o que (?:est[aá]|tem) na c[aâ]mera", re.IGNORECASE)
 ]
 
 SCREEN_INTENT_PATTERNS = [
@@ -78,7 +82,20 @@ class JarvisOrchestrator:
         self.ai_provider: Optional[AIProvider] = None
         self._is_running = False
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop_thread: Optional[threading.Thread] = None
+
+        self._start_persistent_loop()
         self._setup_event_listeners()
+
+    def _start_persistent_loop(self) -> None:
+        """Inicia uma thread com event loop persistente que nunca fecha inesperadamente."""
+        def _runner():
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            self._loop.run_forever()
+
+        self._loop_thread = threading.Thread(target=_runner, daemon=True, name="JarvisPermanentEventLoop")
+        self._loop_thread.start()
 
     def initialize(self) -> bool:
         """Inicializa todos os subsistemas locais e o provedor de IA."""
@@ -106,10 +123,10 @@ class JarvisOrchestrator:
     def _handle_voice_input_event(self, event: Event) -> None:
         """Callback executado quando uma fala valida e transcrita."""
         text = event.data.get("text", "")
-        if text:
+        if text and self._loop and self._loop.is_running():
             future = asyncio.run_coroutine_threadsafe(
                 self.process_user_message(text, from_voice=True),
-                self.get_event_loop()
+                self._loop
             )
             future.add_done_callback(self._on_future_done)
 
@@ -127,16 +144,6 @@ class JarvisOrchestrator:
         if rem_text:
             audio_manager.speak_text(f"Atenção, lembrete: {rem_text}")
 
-    def get_event_loop(self) -> asyncio.AbstractEventLoop:
-        """Retorna o event loop ativo."""
-        if self._loop is None or self._loop.is_closed():
-            try:
-                self._loop = asyncio.get_running_loop()
-            except RuntimeError:
-                self._loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(self._loop)
-        return self._loop
-
     async def process_user_message(self, user_text: str, from_voice: bool = False) -> str:
         """
         Processa uma mensagem enviada pelo usuario (via texto ou voz).
@@ -150,7 +157,6 @@ class JarvisOrchestrator:
         state_machine.set_state(JarvisState.THINKING, "Processando mensagem")
         event_bus.publish(EventType.AI_RESPONSE_STARTED, {"prompt": clean_prompt})
 
-        # Se veio por voz, exibe o balao de mensagem do usuario no chat
         if from_voice:
             try:
                 from app.ui.components.signal_bridge import signal_bridge
@@ -180,6 +186,7 @@ class JarvisOrchestrator:
             # 3. Deteccao de Contexto Visual Automatico (Camera ou Tela)
             images_to_send: List[bytes] = []
             is_visual = False
+            visual_context_text = ""
 
             # Verifica se e pergunta sobre a tela
             for pat in SCREEN_INTENT_PATTERNS:
@@ -190,6 +197,7 @@ class JarvisOrchestrator:
                     if screen_bytes:
                         images_to_send.append(screen_bytes)
                         is_visual = True
+                        visual_context_text = " [O mentor solicitou análise da tela do computador. A captura de tela foi obtida com sucesso.]"
                     break
 
             # Se nao foi tela, verifica se e pergunta sobre a camera/webcam
@@ -198,12 +206,17 @@ class JarvisOrchestrator:
                     if pat.search(clean_prompt):
                         logger.info("Intencao visual detectada: Webcam.")
                         state_machine.set_state(JarvisState.WATCHING, "Capturando imagem da camera")
-                        cam_bytes = vision_manager.capture_frame_for_ai(force=True)
-                        if cam_bytes and len(cam_bytes) > 500:
-                            images_to_send.append(cam_bytes)
+                        raw_frame = camera_capture.capture_frame_sync()
+                        if raw_frame is not None:
+                            scene_desc = vision_manager.describe_scene(raw_frame)
+                            visual_context_text = f" [INFORMAÇÃO VISUAL DA CÂMERA: {scene_desc}. Responda ao mentor com maestria descrevendo com clareza o que a câmera está mostrando.]"
+                            cam_bytes = vision_manager.capture_frame_for_ai(force=True)
+                            if cam_bytes:
+                                images_to_send.append(cam_bytes)
                             is_visual = True
                         else:
-                            logger.warning("Falha ao obter bytes validos da camera.")
+                            logger.warning("Falha ao obter frame da camera.")
+                            visual_context_text = " [Câmera acionada, mas não foi possível obter o sinal de vídeo no momento.]"
                         break
 
             # 4. Monta o Prompt de Sistema Enriquecido com Memoria Solida do Mentor
@@ -217,12 +230,15 @@ class JarvisOrchestrator:
             history = self.session.get_recent_history(limit=8)
             tools = tool_registry.get_schemas_for_ai()
 
+            # Injeta contexto visual no prompt se houver
+            prompt_with_context = clean_prompt + visual_context_text
+
             # 6. Envia Requisicao para a IA com suporte a Tool Calling
             if self.ai_provider is None:
                 self.ai_provider = AIProviderFactory.create_provider()
 
             response: AIResponse = await self.ai_provider.send_message(
-                prompt=clean_prompt,
+                prompt=prompt_with_context,
                 images=images_to_send if images_to_send else None,
                 history=history,
                 tools=tools,
@@ -262,7 +278,7 @@ class JarvisOrchestrator:
                 ]
 
                 extended_history = history + [
-                    {"role": "user", "content": clean_prompt},
+                    {"role": "user", "content": prompt_with_context},
                     {
                         "role": "assistant",
                         "content": final_text or None,
@@ -329,6 +345,8 @@ class JarvisOrchestrator:
         reminder_scheduler.stop()
         audio_manager.stop()
         vision_manager.stop_camera()
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
         state_machine.set_state(JarvisState.OFFLINE, "Sistema desligado")
 
 

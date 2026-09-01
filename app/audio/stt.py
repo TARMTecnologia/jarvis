@@ -1,9 +1,10 @@
 ﻿"""
 Motor Hibrido de Transcricao de Fala (Speech-To-Text) para o JARVIS.
-Suporta Whisper Local (Faster-Whisper int8 100% Offline) e OpenAI Whisper Cloud com ganho inteligente e sem falso-silencio.
+Suporta Whisper Local (Faster-Whisper int8 100% Offline) e OpenAI Whisper Cloud com filtro de ruidos e alucinacoes de fundo.
 """
 
 import io
+import re
 import time
 import wave
 import numpy as np
@@ -14,9 +15,17 @@ from app.core.logging_config import get_logger
 
 logger = get_logger("audio.stt")
 
+# Filtros para alucinacoes comuns do Whisper geradas por ruido de ar/microfone
+HALLUCINATION_PATTERNS = [
+    re.compile(r"^\s*\[(?:m[uú]sica|ru[ií]do|aplausos|sil[eê]ncio|som|risos)\]\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(?:obrigado\s+por\s+assistir|inscreva-se\s+no\s+canal|deixe\s+seu\s+like|legendas\s+por|transcri[cç][aã]o\s+por)\.?\s*$", re.IGNORECASE),
+    re.compile(r"^\s*[.,;:!?_\-\s]+\s*$"),
+    re.compile(r"^\s*(?:you|thank\s+you|bye|subtitles)\.?\s*$", re.IGNORECASE)
+]
+
 
 class LocalSTT:
-    """Motor de transcricao de voz de alta fidelidade com ganho adaptativo."""
+    """Motor de transcricao de voz de alta fidelidade com ganho adaptativo e filtro de ruidos."""
 
     def __init__(self, model_size: str = "base"):
         self.model_size = model_size
@@ -63,12 +72,27 @@ class LocalSTT:
 
         return np.clip(sig, -1.0, 1.0)
 
+    def _is_hallucination(self, text: str) -> bool:
+        """Verifica se o texto retornado e apenas uma alucinacao de ruido de fundo."""
+        if not text or len(text.strip()) < 2:
+            return True
+        for pat in HALLUCINATION_PATTERNS:
+            if pat.match(text.strip()):
+                return True
+        return False
+
     def transcribe(self, audio_data: np.ndarray, sample_rate: int = 16000) -> str:
         """
         Transcreve um segmento de audio.
         Utiliza OpenAI Whisper Cloud se configurado ou Faster-Whisper Local.
         """
         if audio_data is None or len(audio_data) == 0:
+            return ""
+
+        # Verifica energia do sinal (se for ruido absoluto puro, descarta)
+        rms = float(np.sqrt(np.mean(audio_data ** 2)))
+        if rms < 0.002:
+            logger.debug(f"Segmento de audio com energia muito baixa ({rms:.5f}), descartado.")
             return ""
 
         norm_audio = self.normalize_audio(audio_data)
@@ -78,12 +102,16 @@ class LocalSTT:
             openai_key = secrets_manager.get_api_key("openai")
             if openai_key:
                 cloud_text = self._transcribe_openai_cloud(norm_audio, sample_rate, openai_key)
-                if cloud_text and cloud_text.strip():
+                if cloud_text and cloud_text.strip() and not self._is_hallucination(cloud_text):
                     return cloud_text
-                logger.warning("Transcricao OpenAI Cloud vazia ou falhou. Usando Whisper Local como fallback.")
+                logger.warning("Transcricao OpenAI Cloud vazia ou ruido. Usando Whisper Local.")
 
         # 2. Transcricao Local via Faster-Whisper
-        return self._transcribe_local(norm_audio, sample_rate)
+        raw_text = self._transcribe_local(norm_audio, sample_rate)
+        if self._is_hallucination(raw_text):
+            logger.debug(f"Alucinacao de ruido descartada: '{raw_text}'")
+            return ""
+        return raw_text
 
     def _transcribe_local(self, norm_audio: np.ndarray, sample_rate: int) -> str:
         """Transcricao local 100% offline e sem descarte indevido de audio."""

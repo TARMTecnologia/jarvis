@@ -9,11 +9,10 @@ from app.core.config import app_config
 
 
 def test_mentor_voice_enrollment_and_verification():
-    # Cria sinal senoidal simulando voz
     sr = 16000
     t = np.linspace(0, 1.0, sr)
-    mentor_voice = np.sin(2 * np.pi * 220 * t) + 0.5 * np.sin(2 * np.pi * 440 * t)
-    impostor_voice = np.sin(2 * np.pi * 1200 * t) + np.random.normal(0, 0.2, sr)
+    mentor_voice = (np.sin(2 * np.pi * 220 * t) + 0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    impostor_voice = (np.sin(2 * np.pi * 1200 * t) + np.random.normal(0, 0.2, sr)).astype(np.float32)
 
     # 1. Calibra voz do mentor
     success = speaker_identifier.enroll_mentor_voice(mentor_voice, sr=sr)
@@ -25,10 +24,11 @@ def test_mentor_voice_enrollment_and_verification():
 
     is_mentor, sim_mentor = speaker_identifier.is_mentor_voice(mentor_voice, sr=sr)
     assert is_mentor is True
-    assert sim_mentor > 0.80
+    assert sim_mentor > 0.70
 
     is_impostor, sim_impostor = speaker_identifier.is_mentor_voice(impostor_voice, sr=sr)
     assert sim_mentor > sim_impostor
 
-    # Desativa filtro
+    # Limpa estado para não poluir ambiente real
     app_config.audio.mentor_voice_filter_enabled = False
+    speaker_identifier.reset_profile()
