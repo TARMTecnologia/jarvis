@@ -10,6 +10,8 @@ from app.tools.executor import tool_executor
 # Importa os modulos de ferramentas para registrar no catalogo
 import app.tools.system_tools
 import app.tools.browser_tools
+import app.tools.weather_tools
+import app.tools.whatsapp_tools
 import app.tools.file_tools
 import app.tools.clipboard_tools
 import app.tools.screenshot_tools

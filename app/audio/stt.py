@@ -1,6 +1,6 @@
 ﻿"""
 Motor Hibrido de Transcricao de Fala (Speech-To-Text) para o JARVIS.
-Suporta Whisper Local (Faster-Whisper int8 100% Offline) e OpenAI Whisper Cloud com filtro de ruidos e alucinacoes de fundo.
+Suporta Whisper Local (Faster-Whisper int8 100% Offline) e OpenAI Whisper Cloud com filtro rigido de ruidos e alucinacoes (como amara.org, legendas, etc).
 """
 
 import io
@@ -17,10 +17,17 @@ logger = get_logger("audio.stt")
 
 # Filtros para alucinacoes comuns do Whisper geradas por ruido de ar/microfone
 HALLUCINATION_PATTERNS = [
-    re.compile(r"^\s*\[(?:m[uú]sica|ru[ií]do|aplausos|sil[eê]ncio|som|risos)\]\s*$", re.IGNORECASE),
-    re.compile(r"^\s*(?:obrigado\s+por\s+assistir|inscreva-se\s+no\s+canal|deixe\s+seu\s+like|legendas\s+por|transcri[cç][aã]o\s+por)\.?\s*$", re.IGNORECASE),
+    re.compile(r".*amara\.org.*", re.IGNORECASE),
+    re.compile(r".*comunidade\s+da\s+amara.*", re.IGNORECASE),
+    re.compile(r".*legendas\s+(?:pela|por|feitas|de).*", re.IGNORECASE),
+    re.compile(r".*subt[ií]tulos.*", re.IGNORECASE),
+    re.compile(r".*transcri[cç][aã]o\s+(?:feita|por|autom[aá]tica).*", re.IGNORECASE),
+    re.compile(r".*obrigado\s+por\s+assistir.*", re.IGNORECASE),
+    re.compile(r".*inscreva-?se\s+no\s+canal.*", re.IGNORECASE),
+    re.compile(r".*deixe\s+o\s+like.*", re.IGNORECASE),
+    re.compile(r"^\s*\[(?:m[uú]sica|ru[ií]do|aplausos|sil[eê]ncio|som|risos|m[uú]sica\s+de\s+fundo)\]\s*$", re.IGNORECASE),
     re.compile(r"^\s*[.,;:!?_\-\s]+\s*$"),
-    re.compile(r"^\s*(?:you|thank\s+you|bye|subtitles)\.?\s*$", re.IGNORECASE)
+    re.compile(r"^\s*(?:you|thank\s+you|bye|subtitles|welcome)\.?\s*$", re.IGNORECASE)
 ]
 
 
@@ -77,14 +84,14 @@ class LocalSTT:
         if not text or len(text.strip()) < 2:
             return True
         for pat in HALLUCINATION_PATTERNS:
-            if pat.match(text.strip()):
+            if pat.search(text.strip()):
                 return True
         return False
 
     def transcribe(self, audio_data: np.ndarray, sample_rate: int = 16000) -> str:
         """
         Transcreve um segmento de audio.
-        Utiliza OpenAI Whisper Cloud se configurado ou Faster-Whisper Local.
+        Utiliza OpenAI Whisper Cloud se configurado ou Faster-Whisper Local com filtragem estrita.
         """
         if audio_data is None or len(audio_data) == 0:
             return ""
