@@ -52,6 +52,6 @@
         "global_hotkey": "Ctrl+Shift+J",
         "silent_mode": false,
         "allow_computer_automation": false,
-        "first_run_completed": false
+        "first_run_completed": true
     }
 }

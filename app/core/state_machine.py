@@ -1,8 +1,9 @@
-"""
+﻿"""
 Máquina de Estados do JARVIS.
-Gerencia os estados do assistente e notifica observadores (como o Orb visual e a UI).
+Gerencia os estados do assistente e notifica observadores (como o Avatar Robótico, Orb e a UI).
 """
 
+import inspect
 from enum import Enum
 from typing import Callable, List, Dict, Any
 from app.core.logging_config import get_logger
@@ -23,12 +24,12 @@ class JarvisState(str, Enum):
 
 
 class StateMachine:
-    """Controlador de transição de estados com callbacks."""
+    """Controlador de transição de estados com callbacks flexíveis."""
 
     def __init__(self, initial_state: JarvisState = JarvisState.IDLE):
         self._current_state = initial_state
         self._previous_state = initial_state
-        self._listeners: List[Callable[[JarvisState, JarvisState], None]] = []
+        self._listeners: List[Callable] = []
 
     @property
     def current_state(self) -> JarvisState:
@@ -51,18 +52,35 @@ class StateMachine:
 
         for listener in self._listeners:
             try:
-                listener(old_state, new_state)
-            except Exception as e:
-                logger.error(f"Erro ao executar listener de estado: {e}")
+                sig = inspect.signature(listener)
+                params_count = len(sig.parameters)
+                if params_count == 1:
+                    listener(new_state)
+                elif params_count == 2:
+                    listener(old_state, new_state)
+                else:
+                    listener(old_state, new_state, reason)
+            except Exception:
+                try:
+                    listener(old_state, new_state)
+                except Exception as e:
+                    logger.error(f"Erro ao executar listener de estado: {e}")
 
-    def add_listener(self, callback: Callable[[JarvisState, JarvisState], None]) -> None:
+    def add_listener(self, callback: Callable) -> None:
         """Registra um callback a ser chamado em cada transição de estado."""
         if callback not in self._listeners:
             self._listeners.append(callback)
 
-    def remove_listener(self, callback: Callable[[JarvisState, JarvisState], None]) -> None:
+    def add_callback(self, callback: Callable) -> None:
+        """Alias para add_listener para compatibilidade ampla."""
+        self.add_listener(callback)
+
+    def remove_listener(self, callback: Callable) -> None:
         if callback in self._listeners:
             self._listeners.remove(callback)
+
+    def remove_callback(self, callback: Callable) -> None:
+        self.remove_listener(callback)
 
 
 # Instância global compartilhada

@@ -13,6 +13,8 @@ class QtSignalBridge(QObject):
 
     # Sinais Qt (sempre executados na thread da interface)
     sig_message_received = Signal(str, str)         # (role, text)
+    user_message_received = Signal(str)             # (user_text)
+    ai_response_received = Signal(str)              # (assistant_text)
     sig_ai_started = Signal(str)                    # (prompt)
     sig_ai_finished = Signal(str)                   # (response_text)
     sig_state_changed = Signal(str, str)            # (old_state, new_state)
@@ -42,6 +44,7 @@ class QtSignalBridge(QObject):
         if text:
             self.sig_ai_finished.emit(text)
             self.sig_message_received.emit("assistant", text)
+            self.ai_response_received.emit(text)
 
     def _on_audio_level(self, event: Event) -> None:
         rms = event.data.get("rms", 0.0)
@@ -59,8 +62,14 @@ class QtSignalBridge(QObject):
         self.sig_state_changed.emit(old_state.value, new_state.value)
 
     def emit_user_message(self, text: str) -> None:
-        """Envia mensagem digitada pelo usuario para a UI."""
+        """Emite mensagem de usuário com segurança entre threads."""
         self.sig_message_received.emit("user", text)
+        self.user_message_received.emit(text)
+
+    def emit_ai_response(self, text: str) -> None:
+        """Emite resposta da IA com segurança entre threads."""
+        self.sig_message_received.emit("assistant", text)
+        self.ai_response_received.emit(text)
 
 
 signal_bridge = QtSignalBridge()

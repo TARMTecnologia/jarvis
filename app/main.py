@@ -1,6 +1,6 @@
 ﻿"""
 Ponto de Entrada Principal do Aplicativo JARVIS Desktop.
-Inicializa o logging, trava de instancia unica, QApplication e dispara o Setup Wizard ou MainWindow.
+Inicializa o logging, thread de background asyncio, QApplication e abre a MainWindow.
 """
 
 import sys
@@ -45,15 +45,17 @@ def main() -> None:
     # Inicializa orquestrador e subsistemas
     orchestrator.initialize()
 
-    # Se for a primeira execucao, exibe o Setup Wizard
+    # Se for a primeira execucao (e nao tiver sido configurado ainda), exibe o Setup Wizard
     if not app_config.system.first_run_completed:
         logger.info("Primeira execucao detectada. Abrindo Assistente de Configuracao (Setup Wizard)...")
         wizard = SetupWizard()
-        if wizard.exec():
-            logger.info("Setup Wizard finalizado pelo usuario.")
-            orchestrator.reload_provider()
+        wizard.exec()
+        app_config.system.first_run_completed = True
+        app_config.save()
+        logger.info("Setup Wizard finalizado e configuracoes salvas.")
+        orchestrator.reload_provider()
 
-    # Exibe a Janela Principal
+    # Exibe a Janela Principal com o Avatar Robótico
     main_window = MainWindow()
     main_window.show()
 
