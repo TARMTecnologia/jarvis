@@ -1,7 +1,7 @@
 ﻿"""
 Orquestrador Central do JARVIS.
-Coordena a integracao completa entre Audio, Visao, Memoria, Provedores de IA (Nuvem e Ollama Local), Ferramentas e Interface.
-Thread de event loop permanente blindada contra erros assincronos.
+Coordena a integracao completa entre Audio, Visao de Alta Definicao, Memoria Solida, Provedor de IA (OpenAI / Nuvem), Ferramentas e Interface.
+Garante execucao ininterrupta de voz, busca em tempo real e controle total do computador.
 """
 
 import asyncio
@@ -27,36 +27,41 @@ from app.tools.executor import tool_executor
 from app.platform.windows import reminder_scheduler, windows_platform
 import app.tools.weather_tools
 import app.tools.browser_tools
+import app.tools.system_tools
+import app.tools.note_tools
+import app.tools.reminder_tools
+import app.tools.file_tools
+import app.tools.clipboard_tools
+import app.tools.screenshot_tools
 from app.core.logging_config import get_logger
 
 logger = get_logger("core.orchestrator")
 
 DEFAULT_SYSTEM_PROMPT = """Você é JARVIS, um assistente pessoal inteligente de elite, perspicaz, refinado e com voz masculina, operando localmente no computador do seu mentor e criador.
 
-Você tem acesso à memória sólida permanente, visão multimodal (webcam/tela), previsão meteorológica e ferramentas do Windows.
+Você tem acesso à memória permanente, visão computacional de alta definição (webcam/tela), pesquisa em tempo real na internet e controle total do Windows.
 
-DIRETRIZES DE DIÁLOGO E TOM ADAPTATIVO:
+DIRETRIZES DE DIÁLOGO E TOM:
 - Fale em português brasileiro com tom natural, inteligente, elegante, respeitoso e acolhedor.
-- Responda a UMA pergunta ou tópico por vez. Mantenha respostas concisas, conversacionais e agradáveis.
-- Adapte seu tom dinamicamente:
-  * Para programação e tecnologia: cirúrgico, preciso e direto ao ponto.
-  * Para trabalho e tarefas: estruturado e pragmático.
-  * Para rotina e bem-estar: atencioso, encorajador e prestativo.
+- Responda a UMA pergunta ou tópico por vez. Mantenha respostas concisas, conversacionais e agradáveis (1 a 3 frases para resposta falada, a menos que o mentor peça detalhes ou relatórios).
 - Trate sempre seu mentor pelo nome cadastrado ({user_name}) ou por 'Senhor'. NUNCA use a palavra genérica 'Usuário'.
-- Ao responder sobre clima ou temperatura, use a ferramenta get_weather.
-- Ao responder sobre fatos atuais, cotações ou notícias, use a ferramenta search_web.
-- Quando o mentor perguntar sobre a câmera ou o que você está vendo, descreva com clareza os detalhes visuais informados.
-- Nunca afirme ter realizado uma ação antes de receber a confirmação da ferramenta executada.
+- Ao responder sobre clima, previsão ou temperatura, use a ferramenta get_weather.
+- Ao responder sobre notícias, fatos atuais, cotações, esportes ou informações atualizadas, use a ferramenta search_web.
+- Ao ser solicitado para abrir programas ou executar ações no computador, use as ferramentas correspondentes (open_application, create_note, get_system_status, etc.).
+- Quando o mentor perguntar sobre a câmera, objetos na mão ou o que está ao redor, descreva com alta precisão e maestria o que a imagem capturada revela.
+- Nunca afirme ter realizado uma ação no computador antes de receber a confirmação da ferramenta executada.
 """
 
 VISUAL_INTENT_PATTERNS = [
     re.compile(r"o que (?:voc[eê]\s+)?(?:est[aá]|t[aá]) (?:vendo|enxergando|olhando)", re.IGNORECASE),
+    re.compile(r"o que (?:tem|est[aá]) (?:na minha m[aã]o|nas minhas m[aã]os)", re.IGNORECASE),
     re.compile(r"o que (?:eu\s+)?(?:estou|to) (?:segurando|mostrando)", re.IGNORECASE),
+    re.compile(r"o que (?:tem|est[aá]) (?:ao meu redor|aqui em volta|no meu ambiente|na minha sala)", re.IGNORECASE),
     re.compile(r"o que tem (?:na\s+c[aâ]mera|aqui\s+na\s+c[aâ]mera|na\s+minha\s+frente)", re.IGNORECASE),
     re.compile(r"que objeto [eé] esse", re.IGNORECASE),
     re.compile(r"o que [eé] isso (?:aqui)?", re.IGNORECASE),
-    re.compile(r"identifique (?:o\s+que\s+tem|o\s+objeto|isso)", re.IGNORECASE),
-    re.compile(r"veja (?:isso|essa|esse|aqui)", re.IGNORECASE),
+    re.compile(r"identifique (?:esse objeto|o que tem aqui|o que estou segurando|o\s+objeto|isso)", re.IGNORECASE),
+    re.compile(r"veja (?:o que (?:eu )?tenho|minha m[aã]o|ao redor|isso|essa|esse|aqui)", re.IGNORECASE),
     re.compile(r"leia (?:isso|esse|o que est[aá] escrito)", re.IGNORECASE),
     re.compile(r"que cor [eé] (?:essa|isso)", re.IGNORECASE),
     re.compile(r"olhe (?:pra|para|pela|na)\s+c[aâ]mera", re.IGNORECASE),
@@ -200,23 +205,23 @@ class JarvisOrchestrator:
                         visual_context_text = " [O mentor solicitou análise da tela do computador. A captura de tela foi obtida com sucesso.]"
                     break
 
-            # Se nao foi tela, verifica se e pergunta sobre a camera/webcam
+            # Se nao foi tela, verifica se e pergunta sobre a camera/webcam/objetos
             if not is_visual:
                 for pat in VISUAL_INTENT_PATTERNS:
                     if pat.search(clean_prompt):
-                        logger.info("Intencao visual detectada: Webcam.")
+                        logger.info("Intencao visual detectada: Webcam e Reconhecimento de Objetos.")
                         state_machine.set_state(JarvisState.WATCHING, "Capturando imagem da camera")
                         raw_frame = camera_capture.capture_frame_sync()
                         if raw_frame is not None:
                             scene_desc = vision_manager.describe_scene(raw_frame)
-                            visual_context_text = f" [INFORMAÇÃO VISUAL DA CÂMERA: {scene_desc}. Responda ao mentor com maestria descrevendo com clareza o que a câmera está mostrando.]"
                             cam_bytes = vision_manager.capture_frame_for_ai(force=True)
                             if cam_bytes:
                                 images_to_send.append(cam_bytes)
                             is_visual = True
+                            visual_context_text = f" [CÂMERA ATIVA: Imagem capturada em alta definição. Metadados: {scene_desc}. Analise detalhadamente a foto recebida da câmera: identifique objetos segurados nas mãos, elementos ao redor, pessoas ou textos e responda ao mentor com máxima precisão e maestria.]"
                         else:
                             logger.warning("Falha ao obter frame da camera.")
-                            visual_context_text = " [Câmera acionada, mas não foi possível obter o sinal de vídeo no momento.]"
+                            visual_context_text = " [Câmera acionada, mas o sinal de vídeo não pôde ser lido no momento.]"
                         break
 
             # 4. Monta o Prompt de Sistema Enriquecido com Memoria Solida do Mentor

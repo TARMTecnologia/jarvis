@@ -1,4 +1,4 @@
-﻿"""
+"""
 Provedor de IA OpenAI para o JARVIS.
 Suporta modelos GPT-4o, GPT-4o-mini, o3-mini, o1, visão multimodal e function calling com formatação estrita de tool_calls.
 """
@@ -142,7 +142,7 @@ class OpenAIProvider(AIProvider):
                         "type": "image_url",
                         "image_url": {
                             "url": f"data:image/jpeg;base64,{b64_img}",
-                            "detail": "low"
+                            "detail": "high"
                         }
                     })
                 messages.append({"role": "user", "content": content_list})

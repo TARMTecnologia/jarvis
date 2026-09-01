@@ -1,6 +1,7 @@
 ﻿"""
 Motor Hibrido de Sintese de Voz (Text-To-Speech) EXCLUSIVAMENTE MASCULINO para o JARVIS.
 Utiliza vozes neurais masculinas de alta definicao (Edge-TTS pt-BR-Antonio / pt-BR-Fabio) com fallback offline para vozes masculinas SAPI5 (Microsoft Daniel).
+Garante que a fala nunca seja cortada e reproduza do inicio ao fim.
 """
 
 import asyncio
@@ -49,7 +50,6 @@ class LocalTTS:
             for v in engine.getProperty("voices"):
                 vname = v.name.lower()
                 vid = v.id.lower()
-                # Apenas vozes reconhecidamente masculinas
                 if any(m in vname or m in vid for m in ["daniel", "david", "mark", "george", "pablo", "paul", "stefan"]):
                     male_voices.append({
                         "id": v.id,
@@ -65,7 +65,7 @@ class LocalTTS:
 
     def speak(self, text: str, on_start: Optional[Callable[[], None]] = None, on_end: Optional[Callable[[], None]] = None) -> None:
         """
-        Sintetiza e reproduz o texto com voz masculina.
+        Sintetiza e reproduz o texto com voz masculina completa e ininterrupta.
         """
         clean_text = text.strip()
         if not clean_text or app_config.system.silent_mode:
@@ -83,27 +83,27 @@ class LocalTTS:
             except Exception:
                 pass
 
-        selected_voice = app_config.audio.tts_voice_id or DEFAULT_MALE_NEURAL_VOICE
-        # Garante que não use voz feminina
-        if "maria" in selected_voice.lower() or "francisca" in selected_voice.lower():
-            selected_voice = DEFAULT_MALE_NEURAL_VOICE
+        try:
+            selected_voice = app_config.audio.tts_voice_id or DEFAULT_MALE_NEURAL_VOICE
+            if "maria" in selected_voice.lower() or "francisca" in selected_voice.lower():
+                selected_voice = DEFAULT_MALE_NEURAL_VOICE
 
-        if "Neural" in selected_voice or "pt-BR" in selected_voice:
-            success = self._speak_neural(clean_text, selected_voice)
-            if not success and not self._stop_requested:
-                logger.info("Tentando fallback para SAPI5 local masculino...")
-                self._speak_sapi5(clean_text)
-        else:
-            self._speak_sapi5(clean_text, selected_voice)
+            if "Neural" in selected_voice or "pt-BR" in selected_voice:
+                success = self._speak_neural(clean_text, selected_voice)
+                if not success and not self._stop_requested:
+                    logger.info("Tentando fallback para SAPI5 local masculino...")
+                    self._speak_sapi5(clean_text)
+            else:
+                self._speak_sapi5(clean_text, selected_voice)
+        finally:
+            with self._lock:
+                self._is_speaking = False
 
-        with self._lock:
-            self._is_speaking = False
-
-        if on_end:
-            try:
-                on_end()
-            except Exception:
-                pass
+            if on_end:
+                try:
+                    on_end()
+                except Exception:
+                    pass
 
     def _speak_neural(self, text: str, voice_name: str) -> bool:
         """Sintetiza voz neural masculina de alta definicao via Edge-TTS."""
@@ -134,13 +134,7 @@ class LocalTTS:
 
             dev_idx = app_config.audio.output_device_index
             sounddevice.play(data, samplerate=sr, device=dev_idx)
-            
-            while sounddevice.get_stream() and sounddevice.get_stream().active:
-                if self._stop_requested:
-                    sounddevice.stop()
-                    break
-                sounddevice.sleep(30)
-
+            sounddevice.wait() # Aguarda a reproducao completa da frase sem cortar
             return True
 
         except Exception as e:
@@ -171,7 +165,7 @@ class LocalTTS:
             pythoncom.CoUninitialize()
 
     def stop(self) -> None:
-        """Interrompe a fala imediatamente."""
+        """Interrompe a fala se requisitado explicitamente."""
         with self._lock:
             self._stop_requested = True
             self._is_speaking = False

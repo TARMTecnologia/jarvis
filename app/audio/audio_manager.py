@@ -1,6 +1,6 @@
 ﻿"""
 Gerenciador Central do Subsistema de Audio e Voz do JARVIS.
-Integra Microfone, VAD, STT, Wake Word com Janela de Continuação (8s), TTS Masculino e Supressao de Eco.
+Garante reproducao ininterrupta da fala do assistente sem cortes por eco e mantem dialogo fluido com janela de continuacao de 8s.
 """
 
 import re
@@ -24,7 +24,7 @@ logger = get_logger("audio.manager")
 
 
 class AudioManager:
-    """Coordenador do pipeline de escuta contínua, supressão de eco e fala."""
+    """Coordenador do pipeline de escuta contínua, supressão de eco e fala sem cortes."""
 
     def __init__(self):
         self.microphone: MicrophoneManager = microphone
@@ -75,11 +75,10 @@ class AudioManager:
         """Recebe frames do microfone e alimenta VU Meter e VAD."""
         event_bus.publish(EventType.AUDIO_LEVEL_CHANGED, {"rms": rms})
 
-        # Se o Jarvis estiver falando e o usuário emitir voz alta: aciona Barge-In
+        # Quando o Jarvis está falando:
+        # NUNCA interrompe a própria fala por eco de alto-falante.
+        # Permite que ele fale toda a frase do início ao fim sem cortar.
         if self._is_jarvis_speaking:
-            if app_config.audio.barge_in_enabled and rms > (app_config.audio.vad_sensitivity * 0.08):
-                logger.info("Voz detectada durante a fala do Jarvis. Acionando Barge-In!")
-                self.interrupt_speech()
             return
 
         self.vad.process_frame(frame, rms)
@@ -146,7 +145,7 @@ class AudioManager:
             state_machine.set_state(JarvisState.IDLE, "Aguardando wake word")
 
     def speak_text(self, text: str, on_finished: Optional[Callable[[], None]] = None) -> None:
-        """Fala a resposta do Jarvis usando TTS local masculino de forma assíncrona."""
+        """Fala a resposta do Jarvis usando TTS local masculino sem cortes."""
         if not text or not text.strip() or app_config.system.silent_mode:
             if on_finished:
                 on_finished()
@@ -176,7 +175,7 @@ class AudioManager:
         threading.Thread(target=_worker, daemon=True).start()
 
     def interrupt_speech(self) -> None:
-        """Interrompe a fala do Jarvis imediatamente (Barge-in)."""
+        """Interrompe a fala do Jarvis imediatamente se requisitado."""
         self._is_jarvis_speaking = False
         self.tts.stop()
         self.speaker.stop()
