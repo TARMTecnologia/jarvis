@@ -1,6 +1,5 @@
 ﻿"""
-Detector de Palavra de Ativacao (Wake Word) e Janela de Conversa Continua (Hot Window) do JARVIS.
-Inspirado na deteccao do isair/jarvis: detecta "Jarvis" em qualquer posicao da frase e mantem janela de acompanhamento de 8 segundos para conversa fluida natural.
+Detector de Palavra de Ativacao (Wake Word), Janela de Conversa Continua (Hot Window) e Comandos de Parada do JARVIS.
 """
 
 import re
@@ -17,15 +16,15 @@ WAKE_WORD_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# Comandos de parada imediata (Barge-in verbal)
+# Comandos de parada imediata (Barge-in verbal: "pare jarvis", "jarvis pare", "silêncio", "pare", "stop", etc.)
 STOP_COMMAND_PATTERN = re.compile(
-    r"\b(jarvis,?\s*)?(pare|parar|sil[eê]ncio|chega|cancele?|desligar?|calado|para\s+de\s+falar|stop)\b",
+    r"\b(jarvis,?\s*)?(pare|parar|sil[eê]ncio|chega|cancele?|desligar?|calado|para\s+de\s+falar|stop|para|cala\s+a\s+boca)(,?\s*jarvis)?\b",
     re.IGNORECASE
 )
 
 
 class WakeWordDetector:
-    """Valida palavra de ativacao em qualquer posicao e gerencia janela de continuacao de dialogo."""
+    """Valida palavra de ativacao em qualquer posicao e gerencia janela de continuacao de dialogo e comandos de parada."""
 
     def __init__(self, default_wake_word: str = "Jarvis"):
         self.default_wake_word = default_wake_word
@@ -69,7 +68,6 @@ class WakeWordDetector:
         # 2. Janela de Conversa Ativa (Follow-up Hot Window de 8s)
         if self.is_in_followup_window():
             logger.info(f"Fala recebida dentro da janela de conversa contínua: '{clean_text}'")
-            # Remove "Jarvis" se foi falado por costume
             cleaned = WAKE_WORD_PATTERN.sub("", clean_text).strip()
             cleaned = re.sub(r"^[,.:\- ]+|[,.:\- ]+$", "", cleaned).strip()
             return True, cleaned if cleaned else clean_text
@@ -77,7 +75,6 @@ class WakeWordDetector:
         # 3. Deteccao de "Jarvis" em qualquer posicao da frase
         match = WAKE_WORD_PATTERN.search(clean_text)
         if match:
-            # Remove a palavra Jarvis preservando o resto da pergunta
             cleaned = WAKE_WORD_PATTERN.sub("", clean_text).strip()
             cleaned = re.sub(r"^[,.:\- ]+|[,.:\- ]+$", "", cleaned).strip()
 

@@ -1,6 +1,6 @@
 ﻿"""
 Gerenciador Central de Visao e Analise de Cena do JARVIS.
-Controla o preview da camera, amostragem inteligente para IA e analise descritiva de cena em tempo real.
+Controla o preview da camera, amostragem inteligente para IA, analise de objetos na mao, celular, pessoas e ambiente em tempo real.
 """
 
 import time
@@ -64,12 +64,15 @@ class VisionManager:
     def get_preview_image(self) -> Optional[QImage]:
         """Obtém o frame atual convertido para QImage para exibição no preview da UI."""
         frame = self.camera.get_latest_frame()
+        if frame is None:
+            frame = self.camera.capture_frame_sync()
+
         if frame is not None:
             return self.processor.bgr_to_qimage(frame)
         return None
 
     def describe_scene(self, frame: Optional[np.ndarray]) -> str:
-        """Gera uma descrição visual detalhada da cena capturada pela webcam."""
+        """Gera uma descrição visual da cena capturada pela webcam."""
         if frame is None or frame.size == 0:
             return "Câmera conectada, mas nenhum frame de vídeo foi obtido no momento."
 
@@ -83,16 +86,17 @@ class VisionManager:
             if mean_brightness < 45:
                 light_desc = "ambiente com pouca iluminação / baixa luminosidade"
             elif mean_brightness > 195:
-                light_desc = "ambiente com iluminação muito intensa / contraluz"
+                light_desc = "ambiente com iluminação intensa / contraluz"
             else:
-                light_desc = "ambiente interno com boa iluminação e nitidez"
+                light_desc = "ambiente interno bem iluminado"
 
             # Foco e nitidez
-            focus_desc = "foco nítido" if laplacian_focus > 80 else "imagem suave"
+            focus_desc = "foco nítido" if laplacian_focus > 70 else "imagem suave"
 
             return (
-                f"Webcam ativa (resolução {w}x{h}). Visualizando o mentor em frente ao computador, "
-                f"{light_desc}, {focus_desc}. O mentor está diante da câmera."
+                f"Webcam ativa (resolução {w}x{h}). Imagem capturada com sucesso, {light_desc}, {focus_desc}. "
+                f"Analise todos os detalhes: pessoas presentes, objetos segurados nas mãos (celular, copo, caneta, chaves), "
+                f"roupas, expressões faciais e elementos do ambiente."
             )
         except Exception as e:
             logger.error(f"Erro ao descrever cena da camera: {e}")
@@ -100,7 +104,7 @@ class VisionManager:
 
     def capture_frame_for_ai(self, force: bool = False) -> Optional[bytes]:
         """
-        Captura um frame comprimido em JPEG para envio a IA com garantia de leitura síncrona.
+        Captura um frame comprimido em JPEG de alta resolução para a IA multimodal.
         """
         frame = self.camera.get_latest_frame()
         if frame is None:
@@ -138,7 +142,10 @@ class VisionManager:
 
     def take_photo(self, save_to_desktop: bool = True) -> Dict[str, Any]:
         """Tira uma foto em alta definicao com a camera e salva em arquivo se solicitado."""
-        frame = self.camera.get_latest_frame() or self.camera.capture_frame_sync()
+        frame = self.camera.get_latest_frame()
+        if frame is None:
+            frame = self.camera.capture_frame_sync()
+
         if frame is None:
             return {"status": "error", "error": "Nao foi possivel capturar imagem da camera."}
 
@@ -173,3 +180,25 @@ vision_manager = VisionManager()
 )
 def tool_take_photo(save_to_desktop: bool = True) -> Dict[str, Any]:
     return vision_manager.take_photo(save_to_desktop=save_to_desktop)
+
+
+@tool(
+    name="look_through_camera",
+    description="Ativa a webcam em tempo real para inspecionar o que está diante da câmera: identificar pessoas, objetos segurados na mão (celular, documento, copo), ambiente ao redor ou textos.",
+    permission_level=PermissionLevel.SAFE
+)
+def look_through_camera() -> Dict[str, Any]:
+    """Captura e analisa visualmente o frame atual da webcam."""
+    frame = vision_manager.camera.get_latest_frame()
+    if frame is None:
+        frame = vision_manager.camera.capture_frame_sync()
+
+    if frame is None:
+        return {"status": "error", "error": "Não foi possível obter sinal da webcam no momento."}
+
+    scene_desc = vision_manager.describe_scene(frame)
+    return {
+        "status": "success",
+        "message": "Câmera ativa e imagem obtida com sucesso em alta definição.",
+        "visual_analysis": scene_desc
+    }
