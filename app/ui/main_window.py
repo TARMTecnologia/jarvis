@@ -23,9 +23,9 @@ from app.ui.components.face_widget import LowPolyFaceWidget
 from app.ui.components.camera_widget import CameraWidget
 from app.ui.components.audio_visualizer import AudioVisualizerWidget
 from app.ui.components.conversation_widget import ConversationWidget
-from app.ui.dialogs.settings_dialog import SettingsDialog
-from app.ui.dialogs.memory_dialog import MemoryDialog
-from app.ui.dialogs.history_dialog import HistoryDialog
+from app.ui.settings_window import SettingsWindow
+from app.ui.memory_window import MemoryWindow
+from app.ui.history_window import HistoryWindow
 from app.core.logging_config import get_logger
 
 logger = get_logger("ui.main_window")
@@ -268,16 +268,16 @@ class MainWindow(QMainWindow):
         self._send_message()
 
     def open_settings(self) -> None:
-        dlg = SettingsDialog(self)
+        dlg = SettingsWindow(self)
         if dlg.exec():
             self.provider_lbl.setText(f"IA: {app_config.ai.provider.upper()} ({app_config.ai.model})")
 
     def open_memory(self) -> None:
-        dlg = MemoryDialog(self)
+        dlg = MemoryWindow(self)
         dlg.exec()
 
     def open_history(self) -> None:
-        dlg = HistoryDialog(self)
+        dlg = HistoryWindow(self)
         dlg.exec()
 
 
