@@ -75,10 +75,10 @@ RECOMMENDED_MODELS = {
 
 class AISettings(BaseModel):
     """Configuracoes da Inteligencia Artificial."""
-    provider: Literal["openai", "gemini", "anthropic", "claude"] = Field(
-        default="openai", description="Provedor ativo de IA"
+    provider: Literal["openai", "gemini", "anthropic", "claude", "ollama", "local", "lmstudio"] = Field(
+        default="ollama", description="Provedor ativo de IA"
     )
-    model: str = Field(default="gpt-4o", description="ID do modelo a ser utilizado")
+    model: str = Field(default="deepseek-r1:8b", description="ID do modelo a ser utilizado")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=2048, ge=100, le=8192)
     use_realtime_api: bool = Field(default=True, description="Usar Realtime API quando suportado")

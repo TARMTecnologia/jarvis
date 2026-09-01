@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes Unitarios para o Modulo de Configuracao e Secrets do JARVIS.
 """
 
@@ -9,7 +9,7 @@ from app.security.secrets import SecretsManager
 
 def test_app_config_defaults():
     config = AppConfig()
-    assert config.ai.provider in ("openai", "gemini", "claude")
+    assert config.ai.provider in ("openai", "gemini", "claude", "ollama", "local")
     assert config.audio.voice_mode in ("wakeword", "continuous", "push_to_talk")
     assert config.system.language == "pt-BR"
     assert config.memory.enabled is True
@@ -25,6 +25,9 @@ def test_recommended_models_resolution():
 
     claude_model = config.get_default_model_for_provider("claude")
     assert "claude" in claude_model
+
+    ollama_model = config.get_default_model_for_provider("ollama")
+    assert "llama" in ollama_model or "deepseek" in ollama_model
 
 
 def test_secrets_masking():

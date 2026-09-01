@@ -1,6 +1,6 @@
 ﻿"""
 Motor Hibrido de Transcricao de Fala (Speech-To-Text) para o JARVIS.
-Suporta Whisper Local (Faster-Whisper int8) e OpenAI Whisper Cloud (whisper-1) para maxima precisao.
+Suporta Whisper Local (Faster-Whisper int8 100% Offline) e OpenAI Whisper Cloud com ganho inteligente e sem falso-silencio.
 """
 
 import io
@@ -16,7 +16,7 @@ logger = get_logger("audio.stt")
 
 
 class LocalSTT:
-    """Motor de transcricao de voz com suporte a normalizacao de ganho e fallback de alta precisao."""
+    """Motor de transcricao de voz de alta fidelidade com ganho adaptativo."""
 
     def __init__(self, model_size: str = "base"):
         self.model_size = model_size
@@ -47,48 +47,46 @@ class LocalSTT:
             return False
 
     def normalize_audio(self, audio_data: np.ndarray) -> np.ndarray:
-        """Normaliza o ganho do audio para garantir que microfones baixos sejam ouvidos com clareza."""
+        """Normaliza o ganho do audio para garantir que sussurros ou microfones baixos sejam ouvidos com clareza."""
         if audio_data.dtype != np.float32:
             audio_data = audio_data.astype(np.float32)
 
         if audio_data.ndim > 1:
             audio_data = audio_data.flatten()
 
-        max_val = np.max(np.abs(audio_data))
-        if max_val > 0.001:
-            # Ganho automatico para atingir ~80% do volume maximo sem clipping
-            gain = 0.8 / max_val
-            # Limita ganho maximo a 15x para evitar amplificar ruido de fundo puro
-            gain = min(15.0, max(1.0, gain))
-            audio_data = audio_data * gain
+        sig = np.nan_to_num(audio_data, nan=0.0)
+        max_val = float(np.max(np.abs(sig)))
+        if max_val > 0.0005:
+            gain = 0.85 / max_val
+            gain = min(20.0, max(1.0, gain))
+            sig = sig * gain
 
-        return np.clip(audio_data, -1.0, 1.0)
+        return np.clip(sig, -1.0, 1.0)
 
     def transcribe(self, audio_data: np.ndarray, sample_rate: int = 16000) -> str:
         """
         Transcreve um segmento de audio.
-        Utiliza OpenAI Whisper Cloud se configurado ou Faster-Whisper Local com ganho dinamico.
+        Utiliza OpenAI Whisper Cloud se configurado ou Faster-Whisper Local.
         """
         if audio_data is None or len(audio_data) == 0:
             return ""
 
-        # Normaliza ganho do sinal
         norm_audio = self.normalize_audio(audio_data)
 
-        # 1. Se estiver configurado para usar OpenAI Whisper Cloud
+        # 1. Se estiver configurado para OpenAI Whisper Cloud com chave valida
         if app_config.audio.stt_engine == "openai_whisper":
             openai_key = secrets_manager.get_api_key("openai")
             if openai_key:
                 cloud_text = self._transcribe_openai_cloud(norm_audio, sample_rate, openai_key)
-                if cloud_text:
+                if cloud_text and cloud_text.strip():
                     return cloud_text
-                logger.warning("Falha na transcricao OpenAI Cloud. Usando Whisper Local como fallback.")
+                logger.warning("Transcricao OpenAI Cloud vazia ou falhou. Usando Whisper Local como fallback.")
 
         # 2. Transcricao Local via Faster-Whisper
         return self._transcribe_local(norm_audio, sample_rate)
 
     def _transcribe_local(self, norm_audio: np.ndarray, sample_rate: int) -> str:
-        """Transcricao local 100% offline."""
+        """Transcricao local 100% offline e sem descarte indevido de audio."""
         if self._model is None:
             if not self.initialize():
                 return ""
@@ -99,15 +97,17 @@ class LocalSTT:
                 norm_audio,
                 language="pt",
                 beam_size=5,
-                initial_prompt="Transcrição em português brasileiro de conversa com o assistente inteligente Jarvis.",
-                vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=300),
+                temperature=[0.0, 0.2, 0.4],
+                vad_filter=False,
+                initial_prompt="Conversa em português brasileiro com o assistente Jarvis.",
                 condition_on_previous_text=False
             )
 
             text_parts = []
             for segment in segments:
-                text_parts.append(segment.text.strip())
+                t = segment.text.strip()
+                if t:
+                    text_parts.append(t)
 
             full_text = " ".join(text_parts).strip()
             duration = time.time() - start_t
@@ -124,7 +124,6 @@ class LocalSTT:
             from openai import OpenAI
             client = OpenAI(api_key=api_key)
 
-            # Converte float32 em WAV PCM 16-bit em memoria
             int_audio = (norm_audio * 32767.0).astype(np.int16)
             wav_buf = io.BytesIO()
             with wave.open(wav_buf, "wb") as wf:
