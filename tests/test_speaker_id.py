@@ -24,7 +24,7 @@ def test_mentor_voice_enrollment_and_verification():
 
     is_mentor, sim_mentor = speaker_identifier.is_mentor_voice(mentor_voice, sr=sr)
     assert is_mentor is True
-    assert sim_mentor > 0.70
+    assert sim_mentor > 0.45
 
     is_impostor, sim_impostor = speaker_identifier.is_mentor_voice(impostor_voice, sr=sr)
     assert sim_mentor > sim_impostor

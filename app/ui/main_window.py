@@ -1,56 +1,51 @@
 ﻿"""
-Janela Principal da Interface Grafica HUD do JARVIS.
-Integra o ORB animado, chat conversacional, visualizador de webcam, status de hardware e atalhos.
-Thread-safe via SignalBridge.
+Janela Principal da Interface HUD do JARVIS.
+Incorpora o Rosto Robótico Low-Poly Futurista animado, Chat em Tempo Real, Camera, VU Meter e Acoes Rapidas.
 """
 
-import asyncio
 from typing import Optional
-from PySide6.QtCore import Qt, QEvent
-from PySide6.QtGui import QIcon, QCloseEvent
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QFrame, QSplitter, QApplication, QMessageBox
+    QPushButton, QFrame, QSplitter, QMessageBox, QTabWidget
 )
-from app.ui.styles import HUD_DARK_STYLESHEET
-from app.ui.components.orb_widget import OrbWidget
-from app.ui.components.audio_visualizer import AudioVisualizerWidget
-from app.ui.components.status_bar import HardwareStatusBar
-from app.ui.components.signal_bridge import signal_bridge
-from app.ui.camera_widget import CameraWidget
-from app.ui.conversation_widget import ConversationWidget
-from app.ui.settings_window import SettingsWindow
-from app.ui.memory_window import MemoryWindow
-from app.ui.history_window import HistoryWindow
-from app.ui.tray import JarvisTrayIcon, create_tray_icon
-from app.core.orchestrator import orchestrator
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QIcon
+
 from app.core.config import app_config
 from app.core.state_machine import state_machine, JarvisState
-from app.audio.audio_manager import audio_manager
+from app.core.event_bus import event_bus, EventType
+from app.ui.components.face_widget import LowPolyFaceWidget
+from app.ui.components.camera_widget import CameraWidget
+from app.ui.components.conversation_widget import ConversationWidget
+from app.ui.components.audio_visualizer import AudioVisualizerWidget
+from app.ui.components.signal_bridge import signal_bridge
+from app.ui.memory_window import MemoryWindow
+from app.ui.history_window import HistoryWindow
+from app.ui.settings_window import SettingsWindow
 from app.automation.screen_context import screen_context
+from app.ui.styles import HUD_DARK_STYLESHEET
+from app.core.logging_config import get_logger
+
+logger = get_logger("ui.main")
 
 
 class MainWindow(QMainWindow):
-    """Janela principal com estetica HUD futurista."""
+    """Janela Principal com visual futurista e Rosto Holográfico Low-Poly."""
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("JARVIS — Assistente Multimodal Desktop")
-        self.resize(1080, 720)
-        self.setMinimumSize(860, 580)
+        self.setWindowTitle("JARVIS — Assistente de Inteligência Artificial")
+        self.resize(1060, 680)
         self.setStyleSheet(HUD_DARK_STYLESHEET)
-        self.setWindowIcon(create_tray_icon())
-
-        self.tray_icon = JarvisTrayIcon(main_window=self)
-        self.tray_icon.show()
 
         self._setup_ui()
-        self._setup_event_listeners()
+        self._setup_signals()
 
         # Mensagem inicial de boas-vindas
+        effective_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Senhor"
         self.conversation.add_message(
             role="assistant",
-            text=f"Sistemas online. Olá, {app_config.system.user_name}! Como posso ajudá-lo hoje?"
+            text=f"Sistemas operacionais. Olá, {effective_name}! Em que posso ser útil hoje?"
         )
 
     def _setup_ui(self) -> None:
@@ -66,8 +61,8 @@ class MainWindow(QMainWindow):
         top_layout = QHBoxLayout(top_bar)
         top_layout.setContentsMargins(12, 6, 12, 6)
 
-        title_lbl = QLabel("JARVIS HUD v1.0")
-        title_lbl.setStyleSheet("color: #00d2ff; font-weight: bold; font-size: 14px; letter-spacing: 1px;")
+        title_lbl = QLabel("JARVIS HUD AI")
+        title_lbl.setStyleSheet("color: #fbbf24; font-weight: bold; font-size: 15px; letter-spacing: 1.5px;")
         top_layout.addWidget(title_lbl)
 
         # VU Meter
@@ -95,24 +90,29 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(top_bar)
 
-        # 2. CONTEUDO CENTRAL (SPLITTER ESQUERDA: ORB + CAMERA | DIREITA: CHAT)
+        # 2. CONTEUDO CENTRAL (SPLITTER ESQUERDA: ROSTO ROBÔ + CÂMERA | DIREITA: CHAT)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setStyleSheet("QSplitter::handle { background: #1e293b; width: 2px; }")
 
-        # Painel Esquerdo: ORB Animado e Camera
+        # Painel Esquerdo: Rosto Robótico Low-Poly & Câmera
         left_panel = QFrame()
         left_panel.setStyleSheet("background-color: #080a0f; border-radius: 12px; border: 1px solid #1e293b;")
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(12, 12, 12, 12)
-        left_layout.setSpacing(12)
+        left_layout.setContentsMargins(10, 10, 10, 10)
+        left_layout.setSpacing(10)
 
-        self.orb_widget = OrbWidget()
-        left_layout.addWidget(self.orb_widget, alignment=Qt.AlignmentFlag.AlignCenter)
+        # Abas Visuais: Rosto Robótico ou Preview da Câmera
+        self.visual_tabs = QTabWidget()
+        
+        # Tab 1: Rosto Robótico Low-Poly
+        self.face_widget = LowPolyFaceWidget(use_amber=True)
+        self.visual_tabs.addTab(self.face_widget, "🤖 Avatar Robô")
 
+        # Tab 2: Câmera
         self.camera_widget = CameraWidget()
-        left_layout.addWidget(self.camera_widget)
+        self.visual_tabs.addTab(self.camera_widget, "📷 Câmera")
 
-        left_layout.addStretch()
+        left_layout.addWidget(self.visual_tabs)
         splitter.addWidget(left_panel)
 
         # Painel Direito: Chat de Conversa + Campo de Entrada
@@ -140,57 +140,101 @@ class MainWindow(QMainWindow):
         self.send_btn.clicked.connect(self._send_message)
         input_bar.addWidget(self.send_btn)
 
-        self.mic_btn = QPushButton("Falar")
-        self.mic_btn.clicked.connect(self._toggle_push_to_talk)
-        input_bar.addWidget(self.mic_btn)
-
         right_layout.addLayout(input_bar)
         splitter.addWidget(right_panel)
 
-        splitter.setSizes([320, 760])
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 6)
         main_layout.addWidget(splitter)
 
-        # 3. BARRA DE STATUS INFERIOR
-        self.status_bar = HardwareStatusBar()
-        main_layout.addWidget(self.status_bar)
+        # 3. BARRA INFERIOR (STATUS BAR HUD)
+        bottom_bar = QFrame()
+        bottom_bar.setStyleSheet("background-color: #0f172a; border-radius: 6px; border: 1px solid #1e293b;")
+        bottom_layout = QHBoxLayout(bottom_bar)
+        bottom_layout.setContentsMargins(12, 4, 12, 4)
 
-    def _setup_event_listeners(self) -> None:
-        """Conecta eventos seguros via SignalBridge."""
-        signal_bridge.sig_message_received.connect(self._on_message_received)
-        signal_bridge.sig_audio_level.connect(self.vu_meter.set_level)
+        self.status_lbl = QLabel("● Sistema Pronto")
+        self.status_lbl.setStyleSheet("color: #10b981; font-size: 11px; font-weight: bold;")
+        bottom_layout.addWidget(self.status_lbl)
 
-    def _on_message_received(self, role: str, text: str) -> None:
-        """Recebe mensagens entregues com seguranca na GUI thread."""
-        # Se for do assistente, adiciona na conversa (as do usuario sao adicionadas ao enviar)
-        if role == "assistant":
-            self.conversation.add_message(role="assistant", text=text)
+        bottom_layout.addStretch()
+
+        self.provider_lbl = QLabel(f"IA: {app_config.ai.provider.upper()} ({app_config.ai.model})")
+        self.provider_lbl.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        bottom_layout.addWidget(self.provider_lbl)
+
+        main_layout.addWidget(bottom_bar)
+
+    def _setup_signals(self) -> None:
+        signal_bridge.user_message_received.connect(self._on_user_message_received)
+        signal_bridge.ai_response_received.connect(self._on_ai_response_received)
+        state_machine.add_callback(self._on_state_changed)
 
     def _send_message(self) -> None:
         text = self.msg_input.text().strip()
         if not text:
             return
 
-        self.msg_input.clear()
         self.conversation.add_message(role="user", text=text)
+        self.msg_input.clear()
+        self.msg_input.setEnabled(False)
+        self.send_btn.setEnabled(False)
 
-        # Dispara processamento assíncrono
-        asyncio.run_coroutine_threadsafe(
-            orchestrator.process_user_message(text, from_voice=False),
-            orchestrator.get_event_loop()
-        )
+        import asyncio
+        from app.core.orchestrator import orchestrator
+
+        if orchestrator._loop and orchestrator._loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self._async_send_and_reply(text),
+                orchestrator._loop
+            )
+
+    async def _async_send_and_reply(self, text: str) -> None:
+        from app.core.orchestrator import orchestrator
+        try:
+            reply = await orchestrator.process_user_message(text, from_voice=False)
+            signal_bridge.emit_ai_response(reply)
+        except Exception as e:
+            logger.error(f"Erro ao processar envio de texto: {e}")
+            signal_bridge.emit_ai_response(f"Desculpe, ocorreu um erro: {e}")
+        finally:
+            self._restore_input()
+
+    def _restore_input(self) -> None:
+        QTimer.singleShot(0, lambda: self.msg_input.setEnabled(True))
+        QTimer.singleShot(0, lambda: self.send_btn.setEnabled(True))
+        QTimer.singleShot(0, lambda: self.msg_input.setFocus())
 
     def _analyze_screen(self) -> None:
-        self.msg_input.setText("O que está acontecendo nessa tela?")
+        self.msg_input.setText("O que está aberto na minha tela?")
         self._send_message()
 
-    def _toggle_push_to_talk(self) -> None:
-        """Dispara captura imediata de fala."""
-        state_machine.set_state(JarvisState.LISTENING, "Push-to-talk ativado")
+    def _on_user_message_received(self, text: str) -> None:
+        self.conversation.add_message(role="user", text=text)
+
+    def _on_ai_response_received(self, text: str) -> None:
+        self.conversation.add_message(role="assistant", text=text)
+
+    def _on_state_changed(self, new_state: JarvisState, reason: str) -> None:
+        color_map = {
+            JarvisState.IDLE: ("#10b981", "Pronto"),
+            JarvisState.LISTENING: ("#00d2ff", "Ouvindo..."),
+            JarvisState.THINKING: ("#fbbf24", "Pensando..."),
+            JarvisState.SPEAKING: ("#a855f7", "Falando..."),
+            JarvisState.EXECUTING_TOOL: ("#f97316", "Executando Ferramenta..."),
+            JarvisState.WATCHING: ("#06b6d4", "Analisando Visão..."),
+            JarvisState.ERROR: ("#ef4444", "Erro"),
+            JarvisState.OFFLINE: ("#64748b", "Offline"),
+        }
+        color, label = color_map.get(new_state, ("#94a3b8", new_state.value))
+        self.status_lbl.setText(f"● {label} ({reason})")
+        self.status_lbl.setStyleSheet(f"color: {color}; font-size: 11px; font-weight: bold;")
 
     def open_settings(self) -> None:
         dlg = SettingsWindow(self)
         if dlg.exec():
-            self.status_bar.refresh()
+            self.provider_lbl.setText(f"IA: {app_config.ai.provider.upper()} ({app_config.ai.model})")
+            from app.core.orchestrator import orchestrator
             orchestrator.reload_provider()
 
     def open_memory(self) -> None:
@@ -200,27 +244,3 @@ class MainWindow(QMainWindow):
     def open_history(self) -> None:
         dlg = HistoryWindow(self)
         dlg.exec()
-
-    def show_and_activate(self) -> None:
-        self.show()
-        self.raise_()
-        self.activateWindow()
-
-    def closeEvent(self, event: QCloseEvent) -> None:
-        """Minimiza para a bandeja se configurado."""
-        if app_config.system.minimize_to_tray:
-            event.ignore()
-            self.hide()
-            self.tray_icon.showMessage(
-                "JARVIS em Segundo Plano",
-                "O JARVIS continua ativo na bandeja do sistema.",
-                JarvisTrayIcon.MessageIcon.Information,
-                3000
-            )
-        else:
-            self.quit_application()
-
-    def quit_application(self) -> None:
-        orchestrator.shutdown()
-        self.tray_icon.hide()
-        QApplication.quit()
