@@ -1,5 +1,6 @@
 ﻿"""
-Ferramentas de Navegador e Pesquisa na Internet para o JARVIS.
+Ferramentas de Navegador e Pesquisa em Tempo Real na Internet para o JARVIS.
+Utiliza DDGS e Wikipedia para obter noticias, cotacoes, fatos e respostas em tempo real.
 """
 
 import json
@@ -17,11 +18,11 @@ logger = get_logger("tools.browser")
 
 @tool(
     name="search_web",
-    description="Realiza uma pesquisa em tempo real na internet para responder perguntas sobre fatos atuais, noticias, clima, cotacoes ou conhecimento geral.",
+    description="Realiza uma pesquisa em tempo real na internet para responder perguntas sobre fatos atuais, noticias, clima, cotacoes, jogos, programacao ou conhecimento geral.",
     permission_level=PermissionLevel.SAFE
 )
 def search_web(query: str) -> Dict[str, Any]:
-    """Busca resultados reais e resumos da internet via DuckDuckGo / Wikipedia."""
+    """Busca resultados reais e atualizados na internet."""
     clean_query = query.strip()
     if not clean_query:
         return {"status": "error", "error": "Termo de busca vazio."}
@@ -29,102 +30,95 @@ def search_web(query: str) -> Dict[str, Any]:
     logger.info(f"Executando pesquisa na web: '{clean_query}'")
     results = []
 
-    # 1. Tenta DuckDuckGo Instant Answer API
+    # 1. Tenta DDGS (DuckDuckGo Live Search)
     try:
-        api_url = f"https://api.duckduckgo.com/?q={urllib.parse.quote_plus(clean_query)}&format=json&no_html=1&skip_disambig=1"
-        req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read().decode("utf-8"))
-            abstract = data.get("AbstractText", "")
-            if abstract:
-                results.append({"title": data.get("Heading", "Resumo"), "snippet": abstract, "source": data.get("AbstractURL", "")})
-
-            # Tópicos relacionados
-            for topic in data.get("RelatedTopics", [])[:3]:
-                if isinstance(topic, dict) and "Text" in topic:
-                    results.append({"title": "Tópico Relacionado", "snippet": topic["Text"], "source": topic.get("FirstURL", "")})
+        from ddgs import DDGS
+        ddgs = DDGS()
+        raw_res = list(ddgs.text(clean_query, max_results=4))
+        for r in raw_res:
+            title = r.get("title", "")
+            body = r.get("body", "")
+            href = r.get("href", "")
+            if body:
+                results.append({
+                    "title": title,
+                    "snippet": body,
+                    "source": href
+                })
     except Exception as e:
-        logger.debug(f"Aviso na API DuckDuckGo: {e}")
+        logger.debug(f"DDGS falhou, tentando fallback: {e}")
 
-    # 2. Tenta Wikipedia Search API em Português
-    try:
-        wiki_url = f"https://pt.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote_plus(clean_query)}&format=json&utf8=1&srlimit=3"
-        req = urllib.request.Request(wiki_url, headers={"User-Agent": "JarvisAssistant/1.0"})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            wdata = json.loads(response.read().decode("utf-8"))
-            search_items = wdata.get("query", {}).get("search", [])
-            for item in search_items:
-                title = item.get("title", "")
-                raw_snippet = item.get("snippet", "")
-                clean_snippet = re.sub(r"<[^>]+>", "", raw_snippet).strip()
-                if clean_snippet:
-                    results.append({
-                        "title": f"Wikipédia: {title}",
-                        "snippet": clean_snippet,
-                        "url": f"https://pt.wikipedia.org/wiki/{urllib.parse.quote(title)}"
-                    })
-    except Exception as e:
-        logger.debug(f"Aviso na API Wikipedia: {e}")
+    # 2. Se DDGS não retornou ou falhou, tenta Wikipedia Search API em Português
+    if not results:
+        try:
+            wiki_url = f"https://pt.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote_plus(clean_query)}&format=json&utf8=1&srlimit=3"
+            req = urllib.request.Request(wiki_url, headers={"User-Agent": "JarvisAssistant/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                wdata = json.loads(response.read().decode("utf-8"))
+                search_items = wdata.get("query", {}).get("search", [])
+                for item in search_items:
+                    title = item.get("title", "")
+                    raw_snippet = item.get("snippet", "")
+                    clean_snippet = re.sub(r"<[^>]+>", "", raw_snippet).strip()
+                    if clean_snippet:
+                        results.append({
+                            "title": title,
+                            "snippet": clean_snippet,
+                            "source": f"https://pt.wikipedia.org/wiki/{urllib.parse.quote(title.replace(' ', '_'))}"
+                        })
+        except Exception as e:
+            logger.debug(f"Aviso na API Wikipedia: {e}")
 
-    if results:
+    # 3. Formata retorno
+    if not results:
         return {
             "status": "success",
             "query": clean_query,
-            "results_count": len(results),
-            "results": results
+            "results_count": 0,
+            "message": f"Nenhum resultado direto encontrado para '{clean_query}'."
         }
 
-    # Se ambas as APIs rápidas não trouxerem texto suficiente, retorna link de busca
     return {
         "status": "success",
         "query": clean_query,
-        "results_count": 1,
-        "results": [{
-            "title": f"Busca Web por {clean_query}",
-            "snippet": f"Informações atualizadas sobre '{clean_query}'.",
-            "url": f"https://www.google.com/search?q={urllib.parse.quote_plus(clean_query)}"
-        }]
+        "results_count": len(results),
+        "results": results
     }
 
 
 @tool(
     name="open_url",
-    description="Abre um endereco de site (URL) no navegador padrao do usuario (ex: https://youtube.com).",
+    description="Abre uma URL ou site no navegador padrao do Windows.",
     permission_level=PermissionLevel.SAFE
 )
 def open_url(url: str) -> Dict[str, Any]:
+    """Abre um link no navegador do usuario."""
     clean_url = url.strip()
-    if not (clean_url.startswith("http://") or clean_url.startswith("https://")):
-        clean_url = f"https://{clean_url}"
+    if not clean_url.startswith(("http://", "https://")):
+        clean_url = "https://" + clean_url
 
     try:
         webbrowser.open(clean_url)
-        return {"status": "success", "message": f"URL '{clean_url}' aberta no navegador."}
+        logger.info(f"URL aberta no navegador: {clean_url}")
+        return {"status": "success", "url": clean_url, "message": f"Site aberto no navegador: {clean_url}"}
     except Exception as e:
-        logger.error(f"Erro ao abrir URL {clean_url}: {e}")
-        return {"status": "error", "error": str(e)}
+        logger.error(f"Erro ao abrir URL '{clean_url}': {e}")
+        return {"status": "error", "error": f"Nao foi possivel abrir a URL: {str(e)}"}
 
 
 @tool(
     name="search_web_browser",
-    description="Abre o navegador padrao da maquina com a pagina de pesquisa do Google ou Bing.",
+    description="Abre uma busca do Google diretamente em uma nova aba do navegador padrao.",
     permission_level=PermissionLevel.SAFE
 )
-def search_web_browser(query: str, search_engine: str = "google") -> Dict[str, Any]:
-    encoded_query = urllib.parse.quote_plus(query)
-    
-    engines = {
-        "google": f"https://www.google.com/search?q={encoded_query}",
-        "bing": f"https://www.bing.com/search?q={encoded_query}",
-        "duckduckgo": f"https://duckduckgo.com/?q={encoded_query}",
-        "youtube": f"https://www.youtube.com/results?search_query={encoded_query}"
-    }
-
-    url = engines.get(search_engine.lower(), engines["google"])
-
+def search_web_browser(query: str) -> Dict[str, Any]:
+    """Abre uma busca no Google diretamente no navegador."""
+    clean_query = query.strip()
+    search_url = f"https://www.google.com/search?q={urllib.parse.quote_plus(clean_query)}"
     try:
-        webbrowser.open(url)
-        return {"status": "success", "message": f"Pesquisa por '{query}' aberta no {search_engine}."}
+        webbrowser.open(search_url)
+        logger.info(f"Busca no Google aberta no navegador: {clean_query}")
+        return {"status": "success", "query": clean_query, "message": f"Pesquisa aberta no navegador: '{clean_query}'"}
     except Exception as e:
-        logger.error(f"Erro ao pesquisar {query}: {e}")
-        return {"status": "error", "error": str(e)}
+        logger.error(f"Erro ao abrir busca no navegador: {e}")
+        return {"status": "error", "error": f"Falha ao abrir navegador: {str(e)}"}
