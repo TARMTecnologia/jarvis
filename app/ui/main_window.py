@@ -1,4 +1,4 @@
-﻿"""
+"""
 Janela Principal da Interface HUD do JARVIS.
 Incorpora o Rosto Robótico Low-Poly Futurista animado, Chat em Tempo Real, Camera, VU Meter e Acoes Rapidas.
 """
@@ -15,8 +15,8 @@ from app.core.config import app_config
 from app.core.state_machine import state_machine, JarvisState
 from app.core.event_bus import event_bus, EventType
 from app.ui.components.face_widget import LowPolyFaceWidget
-from app.ui.components.camera_widget import CameraWidget
-from app.ui.components.conversation_widget import ConversationWidget
+from app.ui.camera_widget import CameraWidget
+from app.ui.conversation_widget import ConversationWidget
 from app.ui.components.audio_visualizer import AudioVisualizerWidget
 from app.ui.components.signal_bridge import signal_bridge
 from app.ui.memory_window import MemoryWindow
