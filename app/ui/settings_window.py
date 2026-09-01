@@ -1,4 +1,4 @@
-﻿"""
+"""
 Janela de Configuracoes Completas do JARVIS.
 Permite personalizar IA, Audio, Voz Masculina, Identificacao do Mentor, Camera, Memoria e Sistema.
 """
@@ -75,12 +75,14 @@ class SettingsWindow(QDialog):
         prov_layout = QHBoxLayout()
         prov_layout.addWidget(QLabel("Provedor de IA:"))
         self.ai_provider_combo = QComboBox()
-        self.ai_provider_combo.addItems(["OpenAI", "Gemini", "Claude"])
+        self.ai_provider_combo.addItems(["OpenAI", "Gemini", "Claude", "Ollama"])
         cur_prov = app_config.ai.provider.lower()
         if cur_prov == "gemini":
             self.ai_provider_combo.setCurrentText("Gemini")
         elif cur_prov in ("anthropic", "claude"):
             self.ai_provider_combo.setCurrentText("Claude")
+        elif cur_prov in ("ollama", "local"):
+            self.ai_provider_combo.setCurrentText("Ollama")
         else:
             self.ai_provider_combo.setCurrentText("OpenAI")
         self.ai_provider_combo.currentTextChanged.connect(self._on_provider_changed)

@@ -1,8 +1,10 @@
 ﻿"""
 Gerenciador Central do Subsistema de Audio e Voz do JARVIS.
-Integra Microfone, VAD, STT, Wake Word, TTS, Identificacao da Voz do Mentor e Barge-in com o barramento de eventos.
+Integra Microfone, VAD, STT, Wake Word, TTS, Identificacao do Mentor, Deteccao de Eco e Modo Ditado.
 """
 
+import re
+import time
 import threading
 import numpy as np
 from typing import Optional, Callable
@@ -22,7 +24,7 @@ logger = get_logger("audio.manager")
 
 
 class AudioManager:
-    """Coordenador completo do pipeline de voz local com identificação de speaker."""
+    """Coordenador completo do pipeline de voz local com supressão de eco e ditado."""
 
     def __init__(self):
         self.microphone: MicrophoneManager = microphone
@@ -35,6 +37,9 @@ class AudioManager:
 
         self._is_active = False
         self._is_jarvis_speaking = False
+        self._last_spoken_text = ""
+        self._last_speech_end_time = 0.0
+
         self._setup_internal_listeners()
 
     def _setup_internal_listeners(self) -> None:
@@ -95,8 +100,8 @@ class AudioManager:
         ).start()
 
     def _process_transcription_worker(self, audio_data: np.ndarray) -> None:
-        """Executa verificacao da voz do mentor, transcrição local e ativacao."""
-        # 1. Filtro da Voz do Mentor (se ativado)
+        """Executa verificacao da voz do mentor, transcrição local, filtro de eco e ditado."""
+        # 1. Filtro da Voz do Mentor (Speaker ID)
         is_mentor, similarity = self.speaker_id.is_mentor_voice(audio_data)
         if not is_mentor:
             logger.info(f"Voz de terceiro ou ruído descartado (Similaridade: {similarity:.2f})")
@@ -109,14 +114,32 @@ class AudioManager:
             state_machine.set_state(JarvisState.IDLE, "Nenhuma fala compreendida")
             return
 
-        # 3. Comandos de parada (Barge-in verbal)
+        # 3. Supressão Inteligente de Eco (Echo Detection)
+        now = time.time()
+        if (now - self._last_speech_end_time) < 3.0 and self._last_spoken_text:
+            text_clean = re.sub(r"[^\w\s]", "", text.lower()).strip()
+            last_clean = re.sub(r"[^\w\s]", "", self._last_spoken_text.lower()).strip()
+            if text_clean and (text_clean in last_clean or last_clean in text_clean):
+                logger.info(f"Eco detectado e descartado: '{text}'")
+                state_machine.set_state(JarvisState.IDLE, "Eco descartado")
+                return
+
+        # 4. Modo Ditado (WisprFlow offline)
+        from app.automation.dictation import dictation_manager
+        if dictation_manager.is_active:
+            logger.info(f"Inserindo texto ditado na janela ativa: '{text}'")
+            dictation_manager.type_text_into_active_window(text)
+            state_machine.set_state(JarvisState.IDLE, "Texto ditado colado")
+            return
+
+        # 5. Comandos de parada (Barge-in verbal)
         if self.wakeword.is_stop_command(text):
             logger.info(f"Comando de parada recebido via voz: '{text}'")
             self.interrupt_speech()
             state_machine.set_state(JarvisState.IDLE, "Comando de parada")
             return
 
-        # 4. Verifica ativação (Wake Word ou contínuo)
+        # 6. Verifica ativação (Wake Word ou contínuo)
         activated, clean_prompt = self.wakeword.process_transcription(text)
 
         if activated:
@@ -136,6 +159,7 @@ class AudioManager:
 
         def _worker():
             self._is_jarvis_speaking = True
+            self._last_spoken_text = text[:150]
             state_machine.set_state(JarvisState.SPEAKING, "Sintetizando voz do assistente")
             event_bus.publish(EventType.SPEAKER_STARTED, {"text": text})
 
@@ -143,6 +167,7 @@ class AudioManager:
                 self.tts.speak(text)
             finally:
                 self._is_jarvis_speaking = False
+                self._last_speech_end_time = time.time()
                 event_bus.publish(EventType.SPEAKER_FINISHED)
                 state_machine.set_state(JarvisState.IDLE, "Fala do assistente concluida")
                 if on_finished:

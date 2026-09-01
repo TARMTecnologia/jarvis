@@ -1,4 +1,4 @@
-﻿"""
+"""
 Fabrica de Provedores de IA do JARVIS.
 Instancia e configura o provedor correto com base nas configuracoes e chaves seguras.
 """
@@ -8,6 +8,7 @@ from app.ai.base_provider import AIProvider
 from app.ai.openai_provider import OpenAIProvider
 from app.ai.gemini_provider import GeminiProvider
 from app.ai.anthropic_provider import AnthropicProvider
+from app.ai.ollama_provider import OllamaProvider
 from app.security.secrets import secrets_manager
 from app.core.config import app_config
 from app.core.logging_config import get_logger
@@ -40,6 +41,8 @@ class AIProviderFactory:
             return GeminiProvider(api_key=key, model=model)
         elif name in ("anthropic", "claude"):
             return AnthropicProvider(api_key=key, model=model)
+        elif name in ("ollama", "local", "lmstudio"):
+            return OllamaProvider(api_key=key, model=model)
         else:
             logger.warning(f"Provedor desconhecido '{name}'. Usando OpenAI como fallback padrao.")
             return OpenAIProvider(api_key=key, model="gpt-4o-mini")

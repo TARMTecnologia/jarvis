@@ -1,4 +1,4 @@
-﻿"""
+"""
 Gerenciador Central de Memoria do JARVIS.
 Coordena memoria de curto prazo, longo prazo solida, recuperacao semantica e perfil permanente do mentor.
 """
@@ -13,6 +13,8 @@ from app.memory.summarizer import memory_summarizer, MemorySummarizer
 from app.memory.database import db
 from app.core.config import app_config
 from app.core.logging_config import get_logger
+
+from app.security.redactor import sensitive_redactor
 
 logger = get_logger("memory.manager")
 
@@ -64,10 +66,11 @@ class MemoryManager:
                 ))
 
                 msg_id = str(uuid.uuid4())
+                safe_content = sensitive_redactor.redact(content)
                 conn.execute("""
                     INSERT INTO messages (id, conversation_id, role, content, has_image, created_at)
                     VALUES (?, ?, ?, ?, ?, ?)
-                """, (msg_id, conversation_id, role, content, 1 if has_image else 0, time.time()))
+                """, (msg_id, conversation_id, role, safe_content, 1 if has_image else 0, time.time()))
 
                 conn.execute("""
                     UPDATE conversations

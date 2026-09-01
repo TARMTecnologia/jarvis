@@ -1,6 +1,6 @@
 ﻿"""
 Orquestrador Central do JARVIS.
-Coordena a integracao completa entre Audio, Visao, Memoria, Provedores de IA, Ferramentas e Interface.
+Coordena a integracao completa entre Audio, Visao, Memoria, Provedores de IA (Nuvem e Ollama Local), Ferramentas e Interface.
 """
 
 import asyncio
@@ -18,22 +18,30 @@ from app.memory.memory_manager import memory_manager
 from app.audio.audio_manager import audio_manager
 from app.vision.vision_manager import vision_manager
 from app.automation.screen_context import screen_context
+from app.automation.dictation import dictation_manager
 from app.tools.registry import tool_registry
 from app.tools.executor import tool_executor
 from app.platform.windows import reminder_scheduler, windows_platform
+import app.tools.weather_tools
+import app.tools.browser_tools
 from app.core.logging_config import get_logger
 
 logger = get_logger("core.orchestrator")
 
 DEFAULT_SYSTEM_PROMPT = """Você é JARVIS, um assistente pessoal inteligente de elite, perspicaz, refinado e com voz masculina, operando localmente no computador do seu mentor e criador.
 
-Você tem acesso à memória sólida permanente, visão multimodal (webcam/tela) e ferramentas locais do sistema Windows.
+Você tem acesso à memória sólida permanente, visão multimodal (webcam/tela), previsão meteorológica e ferramentas do Windows.
 
-DIRETRIZES DE DIÁLOGO E PERSONALIDADE:
+DIRETRIZES DE DIÁLOGO E TOM ADAPTATIVO:
 - Fale em português brasileiro com tom natural, inteligente, elegante, respeitoso e acolhedor.
-- Responda apenas a UMA pergunta ou tópico por vez. Mantenha as respostas concisas, conversacionais e agradáveis, sem gerar blocos longos de texto a menos que solicitado.
+- Responda a UMA pergunta ou tópico por vez. Mantenha respostas concisas, conversacionais e agradáveis.
+- Adapte seu tom dinamicamente:
+  * Para programação e tecnologia: cirúrgico, preciso e direto ao ponto.
+  * Para trabalho e tarefas: estruturado e pragmático.
+  * Para rotina e bem-estar: atencioso, encorajador e prestativo.
 - Trate sempre seu mentor pelo nome cadastrado ({user_name}) ou por 'Senhor'. NUNCA use a palavra genérica 'Usuário'.
-- Ao responder sobre fatos atuais, clima, cotações ou notícias, utilize a ferramenta search_web.
+- Ao responder sobre clima ou temperatura, use a ferramenta get_weather.
+- Ao responder sobre fatos atuais, cotações ou notícias, use a ferramenta search_web.
 - Quando o mentor pedir para olhar a câmera ou o ambiente, analise com atenção os objetos, textos ou detalhes visuais presentes na imagem capturada.
 - Nunca afirme ter realizado uma ação antes de receber a confirmação da ferramenta executada.
 """
@@ -151,13 +159,25 @@ class JarvisOrchestrator:
                 pass
 
         try:
-            # 1. Verifica Comandos Explicitos de Memoria ou Cadastro de Nome
+            # 1. Comandos de Ditado Rápido
+            if re.search(r"\b(?:iniciar\s+ditado|ativar\s+ditado|modo\s+ditado)\b", clean_prompt, re.IGNORECASE):
+                dictation_manager.start()
+                reply = "Modo Ditado ativado. Pode falar e eu digitarei diretamente na sua janela ativa."
+                self._finalize_turn(clean_prompt, reply, from_voice=from_voice)
+                return reply
+            elif re.search(r"\b(?:parar\s+ditado|desativar\s+ditado|encerrar\s+ditado)\b", clean_prompt, re.IGNORECASE):
+                dictation_manager.stop()
+                reply = "Modo Ditado desativado. Retornando ao modo assistente normal."
+                self._finalize_turn(clean_prompt, reply, from_voice=from_voice)
+                return reply
+
+            # 2. Verifica Comandos Explicitos de Memoria ou Cadastro de Nome
             explicit_memory_reply = memory_manager.handle_explicit_commands(clean_prompt)
             if explicit_memory_reply:
                 self._finalize_turn(clean_prompt, explicit_memory_reply, from_voice=from_voice)
                 return explicit_memory_reply
 
-            # 2. Deteccao de Contexto Visual Automatico (Camera ou Tela)
+            # 3. Deteccao de Contexto Visual Automatico (Camera ou Tela)
             images_to_send: List[bytes] = []
             is_visual = False
 
@@ -186,18 +206,18 @@ class JarvisOrchestrator:
                             logger.warning("Falha ao obter bytes validos da camera.")
                         break
 
-            # 3. Monta o Prompt de Sistema Enriquecido com Memoria Solida do Mentor
+            # 4. Monta o Prompt de Sistema Enriquecido com Memoria Solida do Mentor
             effective_user_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Senhor"
             base_prompt = app_config.ai.system_prompt_override or DEFAULT_SYSTEM_PROMPT.format(
                 user_name=effective_user_name
             )
             system_prompt = memory_manager.prepare_augmented_system_prompt(base_prompt, clean_prompt)
 
-            # 4. Obtem Historico Recente e Ferramentas Cadastradas
+            # 5. Obtem Historico Recente e Ferramentas Cadastradas
             history = self.session.get_recent_history(limit=8)
             tools = tool_registry.get_schemas_for_ai()
 
-            # 5. Envia Requisicao para a IA com suporte a Tool Calling
+            # 6. Envia Requisicao para a IA com suporte a Tool Calling
             if self.ai_provider is None:
                 self.ai_provider = AIProviderFactory.create_provider()
 
@@ -211,7 +231,7 @@ class JarvisOrchestrator:
 
             final_text = response.text or ""
 
-            # 6. Executa Tool Calls se a IA solicitou
+            # 7. Executa Tool Calls se a IA solicitou
             if response.tool_calls:
                 state_machine.set_state(JarvisState.EXECUTING_TOOL, "Executando ferramentas locais")
                 tool_results_history = []
@@ -260,7 +280,7 @@ class JarvisOrchestrator:
                 )
                 final_text = second_response.text or final_text
 
-            # 7. Finalizacao e Resposta Falada
+            # 8. Finalizacao e Resposta Falada
             self._finalize_turn(clean_prompt, final_text, has_image=is_visual, from_voice=from_voice)
             return final_text
 

@@ -57,6 +57,18 @@ RECOMMENDED_MODELS = {
             "claude-3-5-haiku-20241022"
         ],
         "realtime": None
+    },
+    "ollama": {
+        "default": "llama3.2:latest",
+        "recommended": [
+            "llama3.2:latest",
+            "qwen2.5:7b",
+            "qwen2.5-coder:7b",
+            "deepseek-r1:8b",
+            "mistral:latest",
+            "gemma2:9b"
+        ],
+        "realtime": None
     }
 }
 
