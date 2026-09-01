@@ -1,11 +1,22 @@
 ﻿"""
 Captura de Webcam via OpenCV com Suporte Multi-Backend Resiliente para o JARVIS.
-Suporta captura continua desacoplada para a UI e captura instantanea sob demanda para a IA.
+Prioriza DirectShow no Windows, suprime warnings de MSMF e suporta captura instantanea para a IA.
 """
+
+import os
+os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
+os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"
+os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 
 import time
 import threading
 import cv2
+try:
+    if hasattr(cv2, "utils") and hasattr(cv2.utils, "logging"):
+        cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
+except Exception:
+    pass
+
 import numpy as np
 from typing import List, Dict, Any, Optional, Callable
 from app.core.config import app_config
@@ -27,14 +38,14 @@ class CameraCapture:
 
     @staticmethod
     def _open_capture_device(index: int) -> Optional[cv2.VideoCapture]:
-        """Tenta abrir a câmera testando backends compatíveis do Windows (Padrão, MSMF e DSHOW)."""
-        backends = [None, cv2.CAP_MSMF, cv2.CAP_DSHOW]
+        """Tenta abrir a câmera priorizando DirectShow e suprimindo MSMF instável."""
+        backends = [cv2.CAP_DSHOW, None, cv2.CAP_MSMF]
         for b in backends:
             try:
                 cap = cv2.VideoCapture(index, b) if b is not None else cv2.VideoCapture(index)
                 if cap is not None and cap.isOpened():
-                    ret, _ = cap.read()
-                    if ret:
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
                         return cap
                     cap.release()
             except Exception:
@@ -70,9 +81,8 @@ class CameraCapture:
 
             try:
                 self._cap = self._open_capture_device(idx)
-                if self._cap is None:
-                    if idx != 0:
-                        self._cap = self._open_capture_device(0)
+                if self._cap is None and idx != 0:
+                    self._cap = self._open_capture_device(0)
 
                 if self._cap is None or not self._cap.isOpened():
                     logger.warning(f"Não foi possível abrir a câmera índice {idx}.")

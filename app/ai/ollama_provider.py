@@ -1,8 +1,9 @@
 ﻿"""
 Provedor de IA Ollama / LM Studio Local para o JARVIS.
-Permite executar modelos 100% locais e offline (Llama 3, Qwen 2.5, DeepSeek, Mistral, Gemma).
+Suporta modelos locais como DeepSeek-R1 (com filtro de tags <think>), Llama 3.2, Qwen 2.5, Mistral e Gemma.
 """
 
+import re
 import json
 from typing import Optional, List, Dict, Any, Tuple, AsyncGenerator
 from app.ai.base_provider import AIProvider, AIResponse, AIResponseChunk, ToolCallRequest
@@ -11,11 +12,11 @@ from app.core.logging_config import get_logger
 logger = get_logger("ai.ollama")
 
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_OLLAMA_MODEL = "llama3.2:latest"
+DEFAULT_OLLAMA_MODEL = "deepseek-r1:8b"
 
 
 class OllamaProvider(AIProvider):
-    """Provedor para servidores locais compatíveis com API OpenAI (Ollama, LM Studio, LocalAI)."""
+    """Provedor resiliente para servidores locais compatíveis com API OpenAI (Ollama, LM Studio)."""
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None, base_url: Optional[str] = None):
         super().__init__(api_key=api_key or "ollama", model=model or DEFAULT_OLLAMA_MODEL)
@@ -40,17 +41,17 @@ class OllamaProvider(AIProvider):
             return False
 
     async def test_connection(self) -> Tuple[bool, str]:
-        """Verifica se o servidor Ollama/LM Studio local está ativo."""
+        """Verifica se o servidor Ollama/LM Studio local está ativo e lista modelos."""
         try:
             from openai import AsyncOpenAI
             client = self._async_client or AsyncOpenAI(base_url=self.base_url, api_key="ollama")
             models = await client.models.list()
             if models and models.data:
                 names = [m.id for m in models.data]
-                return True, f"Servidor Local OK! ({len(names)} modelos encontrados: {', '.join(names[:3])})"
+                return True, f"Ollama Local Conectado! ({len(names)} modelos encontrados: {', '.join(names[:4])})"
             return True, "Servidor Local conectado com sucesso."
         except Exception as e:
-            return False, f"Servidor local offline ({self.base_url}). Certifique-se de que o Ollama ou LM Studio está aberto."
+            return False, f"Ollama local offline ({self.base_url}). Certifique-se de que o Ollama está aberto."
 
     def format_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         openai_tools = []
@@ -68,6 +69,16 @@ class OllamaProvider(AIProvider):
                 }
             })
         return openai_tools
+
+    def _clean_deepseek_reasoning(self, text: Optional[str]) -> str:
+        """Remove tags internas <think>...</think> do DeepSeek-R1 para resposta limpa e falada."""
+        if not text:
+            return ""
+        # Remove bloco <think>...</think>
+        cleaned = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
+        # Remove tag <think> aberta se nao fechou
+        cleaned = re.sub(r"^<think>[\s\S]*$", "", cleaned).strip()
+        return cleaned if cleaned else text.strip()
 
     def _build_messages(
         self,
@@ -110,7 +121,7 @@ class OllamaProvider(AIProvider):
         tools: Optional[List[Dict[str, Any]]] = None,
         system_prompt: Optional[str] = None
     ) -> AIResponse:
-        """Envia requisição para o LLM local."""
+        """Envia requisição para o LLM local com suporte a DeepSeek-R1 e fallback seguro de ferramentas."""
         if not self._is_initialized and not self.initialize():
             return AIResponse(text=f"Erro: Não foi possível conectar ao servidor Ollama em {self.base_url}.")
 
@@ -120,34 +131,50 @@ class OllamaProvider(AIProvider):
             "messages": messages,
         }
 
-        if tools and len(tools) > 0:
+        # Modelos como deepseek-r1 não suportam schema de tools nativo no Ollama
+        is_reasoning_model = any(k in self.model.lower() for k in ["deepseek", "r1", "think"])
+        if tools and len(tools) > 0 and not is_reasoning_model:
             kwargs["tools"] = self.format_tools(tools)
             kwargs["tool_choice"] = "auto"
 
         try:
-            completion = await self._async_client.chat.completions.create(**kwargs)
-            choice = completion.choices[0]
-            message = choice.message
-
-            tool_calls = []
-            if message.tool_calls:
-                for tc in message.tool_calls:
-                    args = self.parse_tool_arguments(tc.function.arguments)
-                    tool_calls.append(ToolCallRequest(
-                        id=tc.id,
-                        name=tc.function.name,
-                        arguments=args
-                    ))
-
-            return AIResponse(
-                text=message.content or "",
-                tool_calls=tool_calls,
-                finish_reason=choice.finish_reason or "stop",
-                raw_response=completion
-            )
+            return await self._execute(kwargs)
         except Exception as e:
-            logger.error(f"Erro ao consultar Ollama local: {e}")
-            return AIResponse(text=f"Desculpe, ocorreu um erro com o modelo local Ollama: {str(e)}")
+            err_str = str(e)
+            logger.warning(f"Erro na requisição Ollama ({err_str}). Tentando sem tools...")
+            if "tools" in kwargs:
+                kwargs.pop("tools", None)
+                kwargs.pop("tool_choice", None)
+                try:
+                    return await self._execute(kwargs)
+                except Exception as e2:
+                    return AIResponse(text=f"Erro no modelo local Ollama '{self.model}': {str(e2)}")
+            return AIResponse(text=f"Erro no modelo local Ollama '{self.model}': {err_str}")
+
+    async def _execute(self, kwargs: Dict[str, Any]) -> AIResponse:
+        completion = await self._async_client.chat.completions.create(**kwargs)
+        choice = completion.choices[0]
+        message = choice.message
+
+        raw_content = message.content or ""
+        clean_content = self._clean_deepseek_reasoning(raw_content)
+
+        tool_calls = []
+        if message.tool_calls:
+            for tc in message.tool_calls:
+                args = self.parse_tool_arguments(tc.function.arguments)
+                tool_calls.append(ToolCallRequest(
+                    id=tc.id,
+                    name=tc.function.name,
+                    arguments=args
+                ))
+
+        return AIResponse(
+            text=clean_content,
+            tool_calls=tool_calls,
+            finish_reason=choice.finish_reason or "stop",
+            raw_response=completion
+        )
 
     async def stream_response(
         self,
@@ -168,18 +195,27 @@ class OllamaProvider(AIProvider):
                 messages=messages,
                 stream=True
             )
+            inside_think = False
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
-                    yield AIResponseChunk(text=chunk.choices[0].delta.content, is_done=False)
+                    token = chunk.choices[0].delta.content
+                    if "<think>" in token:
+                        inside_think = True
+                        continue
+                    if "</think>" in token:
+                        inside_think = False
+                        continue
+                    if not inside_think:
+                        yield AIResponseChunk(text=token, is_done=False)
             yield AIResponseChunk(text="", is_done=True)
         except Exception as e:
-            yield AIResponseChunk(text=f"\n[Erro no streaming local: {e}]", is_done=True)
+            yield AIResponseChunk(text=f"\n[Erro no streaming Ollama: {e}]", is_done=True)
 
     def supports_realtime(self) -> bool:
         return False
 
     def supports_vision(self) -> bool:
-        return "vision" in self.model.lower() or "llava" in self.model.lower()
+        return any(v in self.model.lower() for v in ["vision", "llava", "minicpm", "bakllava"])
 
     def supports_native_audio(self) -> bool:
         return False

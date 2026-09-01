@@ -1,9 +1,12 @@
-"""
+﻿"""
 Janela de Configuracoes Completas do JARVIS.
-Permite personalizar IA, Audio, Voz Masculina, Identificacao do Mentor, Camera, Memoria e Sistema.
+Permite personalizar IA (incluindo Ollama com auto-descoberta de modelos locais), Audio, Voz Masculina, Calibracao do Mentor, Camera e Memoria.
 """
 
 import asyncio
+import urllib.request
+import json
+import time
 import numpy as np
 from typing import Optional
 from PySide6.QtCore import Qt
@@ -32,7 +35,7 @@ class SettingsWindow(QDialog):
     def __init__(self, parent: QWidget = None):
         super().__init__(parent)
         self.setWindowTitle("JARVIS — Configurações")
-        self.resize(780, 600)
+        self.resize(790, 610)
         self.setStyleSheet(HUD_DARK_STYLESHEET)
 
         main_layout = QVBoxLayout(self)
@@ -89,9 +92,10 @@ class SettingsWindow(QDialog):
         prov_layout.addWidget(self.ai_provider_combo)
         layout.addLayout(prov_layout)
 
-        # API Key
+        # API Key / Endpoint
         key_layout = QVBoxLayout()
-        key_layout.addWidget(QLabel("Chave de API (Armazenada com segurança no Windows Credential Locker):"))
+        self.api_key_lbl = QLabel("Chave de API (Armazenada com segurança no Windows Credential Locker):")
+        key_layout.addWidget(self.api_key_lbl)
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         saved_key = secrets_manager.get_api_key(app_config.ai.provider)
@@ -125,22 +129,46 @@ class SettingsWindow(QDialog):
     def _populate_models(self, provider_name: str) -> None:
         self.model_combo.clear()
         prov_clean = provider_name.lower().replace("openai", "openai").replace("gemini", "gemini").replace("claude", "claude")
+
+        # Se for Ollama, tenta listar modelos locais reais instalados
+        if prov_clean in ("ollama", "local"):
+            try:
+                with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2) as res:
+                    data = json.loads(res.read().decode("utf-8"))
+                    local_models = [m["name"] for m in data.get("models", [])]
+                    if local_models:
+                        self.model_combo.addItems(local_models)
+                        if app_config.ai.model in local_models:
+                            self.model_combo.setCurrentText(app_config.ai.model)
+                        else:
+                            self.model_combo.setEditText(app_config.ai.model or local_models[0])
+                        return
+            except Exception:
+                pass
+
         models = RECOMMENDED_MODELS.get(prov_clean, {}).get("recommended", [app_config.ai.model])
         self.model_combo.addItems(models)
         self.model_combo.setEditText(app_config.ai.model)
 
     def _on_provider_changed(self, text: str) -> None:
         prov = text.lower()
+        if prov in ("ollama", "local"):
+            self.api_key_lbl.setText("Endpoint / Chave Local (Ollama não requer chave):")
+            self.api_key_input.setPlaceholderText("http://localhost:11434/v1")
+        else:
+            self.api_key_lbl.setText("Chave de API (Armazenada com segurança no Windows Credential Locker):")
+            self.api_key_input.setPlaceholderText("")
+
         self._populate_models(prov)
         saved_key = secrets_manager.get_api_key(prov)
         self.api_key_input.setText(saved_key or "")
 
     def _test_ai_connection(self) -> None:
         prov = self.ai_provider_combo.currentText().lower()
-        key = self.api_key_input.text().strip()
+        key = self.api_key_input.text().strip() or ("ollama" if prov in ("ollama", "local") else "")
         model = self.model_combo.currentText().strip()
 
-        if not key:
+        if not key and prov not in ("ollama", "local"):
             self.ai_status_lbl.setText("Chave de API não informada.")
             self.ai_status_lbl.setStyleSheet("color: #ef4444;")
             return
@@ -213,8 +241,8 @@ class SettingsWindow(QDialog):
         # Motor de Transcricao STT
         layout.addWidget(QLabel("Motor de Transcrição de Voz (STT):"))
         self.stt_engine_combo = QComboBox()
-        self.stt_engine_combo.addItem("Whisper Local (Faster-Whisper int8 100% Offline)", "local_whisper")
-        self.stt_engine_combo.addItem("OpenAI Whisper Cloud (whisper-1 — Máxima Precisão PT-BR)", "openai_whisper")
+        self.stt_engine_combo.addItem("Whisper Local (Faster-Whisper int8 100% Offline — Recomendado)", "local_whisper")
+        self.stt_engine_combo.addItem("OpenAI Whisper Cloud (whisper-1 — Requer Chave OpenAI)", "openai_whisper")
         if app_config.audio.stt_engine == "openai_whisper":
             self.stt_engine_combo.setCurrentIndex(1)
         layout.addWidget(self.stt_engine_combo)
@@ -231,10 +259,24 @@ class SettingsWindow(QDialog):
                 self.voice_mode_combo.setCurrentIndex(i)
         layout.addWidget(self.voice_mode_combo)
 
-        # Identificacao da Voz do Mentor
-        self.mentor_voice_cb = QCheckBox("Identificação de Voz do Mentor (Filtrar e responder apenas à minha voz)")
+        # Identificacao da Voz do Mentor (Speaker ID)
+        speaker_box = QGroupBox("Identificação Vocal do Mentor")
+        speaker_layout = QVBoxLayout(speaker_box)
+        
+        self.mentor_voice_cb = QCheckBox("Filtrar e responder exclusivamente à minha voz (Ignora outras pessoas)")
         self.mentor_voice_cb.setChecked(getattr(app_config.audio, "mentor_voice_filter_enabled", False))
-        layout.addWidget(self.mentor_voice_cb)
+        speaker_layout.addWidget(self.mentor_voice_cb)
+
+        calib_layout = QHBoxLayout()
+        self.calibrate_voice_btn = QPushButton("🎙️ Gravar / Calibrar Minha Voz Agora (3s)")
+        self.calibrate_voice_btn.clicked.connect(self._calibrate_mentor_voice)
+        self.voice_calib_status = QLabel("" if speaker_identifier.mentor_voiceprint is None else "● Perfil de Voz Ativo")
+        self.voice_calib_status.setStyleSheet("color: #10b981;")
+        calib_layout.addWidget(self.calibrate_voice_btn)
+        calib_layout.addWidget(self.voice_calib_status)
+        calib_layout.addStretch()
+        speaker_layout.addLayout(calib_layout)
+        layout.addWidget(speaker_box)
 
         # Velocidade TTS
         speed_layout = QHBoxLayout()
@@ -262,6 +304,31 @@ class SettingsWindow(QDialog):
         app_config.audio.tts_rate = self.speed_slider.value()
         mentor_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Senhor"
         local_tts.speak(f"Olá {mentor_name}! Todos os sistemas de áudio e voz masculina estão operacionais.")
+
+    def _calibrate_mentor_voice(self) -> None:
+        self.voice_calib_status.setText("Gravando... Fale no microfone por 3 segundos.")
+        self.voice_calib_status.setStyleSheet("color: #00d2ff;")
+        self.calibrate_voice_btn.setEnabled(False)
+
+        import sounddevice as sd
+        try:
+            dev_idx = self.mic_combo.currentData()
+            audio = sd.rec(int(3.0 * 16000), samplerate=16000, channels=1, dtype=np.float32, device=dev_idx)
+            sd.wait()
+            success = speaker_identifier.enroll_mentor_voice(audio.flatten(), sr=16000)
+            if success:
+                self.voice_calib_status.setText("● Perfil Calibrado com Sucesso!")
+                self.voice_calib_status.setStyleSheet("color: #10b981;")
+                self.mentor_voice_cb.setChecked(True)
+                QMessageBox.information(self, "Voz Calibrada", "Sua impressão vocal foi gravada com sucesso!\nO JARVIS agora reconhece sua voz com exclusividade.")
+            else:
+                self.voice_calib_status.setText("Falha na calibração.")
+                self.voice_calib_status.setStyleSheet("color: #ef4444;")
+        except Exception as e:
+            self.voice_calib_status.setText(f"Erro: {e}")
+            self.voice_calib_status.setStyleSheet("color: #ef4444;")
+        finally:
+            self.calibrate_voice_btn.setEnabled(True)
 
     # 3. ABA CAMERA
     def _create_vision_tab(self) -> None:
@@ -444,7 +511,7 @@ class SettingsWindow(QDialog):
         if key:
             secrets_manager.set_api_key(prov, key)
         app_config.ai.provider = prov
-        app_config.ai.model = model or "gpt-4o"
+        app_config.ai.model = model or "deepseek-r1:8b"
 
         app_config.audio.input_device_index = self.mic_combo.currentData()
         app_config.audio.output_device_index = self.speaker_combo.currentData()
