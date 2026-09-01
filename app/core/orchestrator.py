@@ -1,6 +1,6 @@
 ﻿"""
 Orquestrador Central do JARVIS.
-Coordena a integracao completa entre Audio, Visao de Alta Definicao, Memoria Solida, Identificacao de Voz do Mentor, Provedor de IA (OpenAI / Nuvem), Ferramentas e Interface.
+Coordena a integracao completa entre Audio, Visao HD (Olhos do JARVIS), Memoria Solida, Identificacao Facial e Vocal do Mentor, Provedor de IA (OpenAI / Nuvem), Ferramentas e Interface.
 Garante execucao ininterrupta de voz, busca em tempo real e controle total do computador.
 """
 
@@ -40,7 +40,7 @@ logger = get_logger("core.orchestrator")
 
 DEFAULT_SYSTEM_PROMPT = """Você é JARVIS, um assistente pessoal inteligente de elite, perspicaz, refinado e com voz masculina, operando localmente no computador do seu mentor e criador.
 
-Você tem acesso à memória permanente, visão computacional de alta definição (webcam/tela), pesquisa em tempo real na internet e controle total do Windows.
+Você tem acesso à memória permanente, visão computacional de alta definição (os olhos da webcam e captura de tela), pesquisa em tempo real na internet e controle total do Windows.
 
 DIRETRIZES DE DIÁLOGO E TOM:
 - Fale em português brasileiro com tom natural, inteligente, elegante, respeitoso e acolhedor.
@@ -52,6 +52,13 @@ DIRETRIZES DE DIÁLOGO E TOM:
 - Quando o mentor perguntar sobre a webcam, objetos na mão (celular, caneta, copo, chaves), pessoas presentes ou o que está ao redor, descreva com alta precisão e maestria o que a imagem capturada da câmera revela.
 - Nunca afirme ter realizado uma ação no computador antes de receber a confirmação da ferramenta executada.
 """
+
+FACE_CALIBRATION_PATTERNS = [
+    re.compile(r"\b(?:a\s+pessoa\s+(?:na\s+frente|diante)\s+da\s+(?:web\s*cam|c[aâ]mera)\s+sou\s+eu|sou\s+eu\s+(?:na\s+frente\s+da\s+)?(?:web\s*cam|c[aâ]mera))\b", re.IGNORECASE),
+    re.compile(r"\b(?:este|esse)\s+sou\s+eu\s+na\s+(?:web\s*cam|c[aâ]mera)\b", re.IGNORECASE),
+    re.compile(r"\b(?:aprenda|grave|cadastre|registre|calibre)\s+(?:o\s+)?meu\s+rosto\b", re.IGNORECASE),
+    re.compile(r"\b(?:memorize|reconhe[cç]a)\s+(?:a\s+)?minha\s+fisionomia\b", re.IGNORECASE)
+]
 
 VOICE_CALIBRATION_PATTERNS = [
     re.compile(r"\b(?:calibre|calibrar|grave|gravar|aprenda|aprender|reconhe[cç]a|cadastre)\s+(?:a\s+)?minha\s+voz\b", re.IGNORECASE),
@@ -65,10 +72,10 @@ VISUAL_INTENT_PATTERNS = [
     re.compile(r"o que (?:eu\s+)?(?:estou|to) (?:segurando|mostrando)", re.IGNORECASE),
     re.compile(r"o que (?:tem|est[aá]) (?:ao meu redor|aqui em volta|no meu ambiente|na minha sala)", re.IGNORECASE),
     re.compile(r"o que (?:tem|est[aá]|mostra)\s+(?:na\s+)?(?:web\s*cam|c[aâ]mera)", re.IGNORECASE),
-    re.compile(r"(?:tem|quantas)\s+pessoas?\s+(?:tem|comigo|aqui|na\s+c[aâ]mera)", re.IGNORECASE),
+    re.compile(r"(?:quem|quantas)\s+pessoas?\s+(?:est[aá]|tem|comigo|aqui|na\s+c[aâ]mera|diante)", re.IGNORECASE),
     re.compile(r"que objeto [eé] esse", re.IGNORECASE),
     re.compile(r"o que [eé] isso (?:aqui)?", re.IGNORECASE),
-    re.compile(r"identifique (?:esse objeto|o que tem aqui|o que estou segurando|o\s+objeto|isso|a\s+pessoa)", re.IGNORECASE),
+    re.compile(r"identifique (?:esse objeto|o que tem aqui|o que estou segurando|o\s+objeto|isso|a\s+pessoa|quem\s+[eé])", re.IGNORECASE),
     re.compile(r"veja (?:o que (?:eu )?tenho|minha m[aã]o|ao redor|isso|essa|esse|aqui|a\s+web\s*cam)", re.IGNORECASE),
     re.compile(r"leia (?:isso|esse|o que est[aá] escrito)", re.IGNORECASE),
     re.compile(r"que cor [eé] (?:essa|isso)", re.IGNORECASE),
@@ -190,22 +197,40 @@ class JarvisOrchestrator:
                 self._finalize_turn(clean_prompt, reply, from_voice=from_voice)
                 return reply
 
-            # 2. Comandos de Calibração da Voz do Mentor (Speaker ID)
+            # 2. Comandos de Registro Facial do Mentor (Face ID via Webcam)
+            for fpat in FACE_CALIBRATION_PATTERNS:
+                if fpat.search(clean_prompt):
+                    raw_frame = camera_capture.get_latest_frame()
+                    if raw_frame is None:
+                        raw_frame = camera_capture.capture_frame_sync()
+
+                    if raw_frame is not None:
+                        vision_manager.save_mentor_face(raw_frame)
+                        effective_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Senhor"
+                        reply = f"Perfeito, {effective_name}! Capturei sua imagem através da webcam e gravei sua fisionomia permanentemente em minha memória visual. A partir de agora saberei reconhecer exatamente quem é você diante da câmera e diferenciar se há outras pessoas ao seu lado."
+                    else:
+                        reply = "Tentei capturar sua imagem pela webcam, mas não foi possível obter o sinal de vídeo. Verifique se a câmera está conectada."
+
+                    self._finalize_turn(clean_prompt, reply, from_voice=from_voice)
+                    return reply
+
+            # 3. Comandos de Calibração da Voz do Mentor (Speaker ID)
             for vpat in VOICE_CALIBRATION_PATTERNS:
                 if vpat.search(clean_prompt):
                     app_config.audio.mentor_voice_filter_enabled = True
                     app_config.save()
-                    reply = "Sua voz foi calibrada e gravada com sucesso! A partir de agora, responderei com prioridade à sua voz e filtrarei ruídos e terceiros no ambiente."
+                    effective_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Senhor"
+                    reply = f"Sua voz foi calibrada e gravada com sucesso, {effective_name}! A partir de agora, responderei exclusivamente a você e filtrarei ruídos e terceiros no ambiente."
                     self._finalize_turn(clean_prompt, reply, from_voice=from_voice)
                     return reply
 
-            # 3. Comandos Explicitos de Memoria ou Cadastro de Nome
+            # 4. Comandos Explicitos de Memoria ou Cadastro de Nome
             explicit_memory_reply = memory_manager.handle_explicit_commands(clean_prompt)
             if explicit_memory_reply:
                 self._finalize_turn(clean_prompt, explicit_memory_reply, from_voice=from_voice)
                 return explicit_memory_reply
 
-            # 4. Deteccao de Contexto Visual Automatico (Camera ou Tela)
+            # 5. Deteccao de Contexto Visual Automatico (Camera ou Tela)
             images_to_send: List[bytes] = []
             is_visual = False
             visual_context_text = ""
@@ -222,12 +247,12 @@ class JarvisOrchestrator:
                         visual_context_text = " [O mentor solicitou análise da tela do computador. A captura de tela foi obtida com sucesso.]"
                     break
 
-            # Se nao foi tela, verifica se e pergunta sobre a camera/webcam/objetos
+            # Se nao foi tela, verifica se e pergunta sobre a camera/webcam/objetos/pessoas
             if not is_visual:
                 for pat in VISUAL_INTENT_PATTERNS:
                     if pat.search(clean_prompt):
-                        logger.info("Intencao visual detectada: Webcam e Reconhecimento de Objetos/Pessoas.")
-                        state_machine.set_state(JarvisState.WATCHING, "Capturando imagem da camera")
+                        logger.info("Intencao visual detectada: Olhos da Webcam (Pessoas e Objetos).")
+                        state_machine.set_state(JarvisState.WATCHING, "Capturando imagem da webcam")
                         raw_frame = camera_capture.get_latest_frame()
                         if raw_frame is None:
                             raw_frame = camera_capture.capture_frame_sync()
@@ -238,32 +263,34 @@ class JarvisOrchestrator:
                             if cam_bytes:
                                 images_to_send.append(cam_bytes)
                             is_visual = True
+                            user_label = app_config.system.user_name if app_config.system.user_name != "Usuário" else "o mentor"
                             visual_context_text = (
-                                f" [CÂMERA ATIVA: Frame de alta definição capturado. Metadados da cena: {scene_desc}. "
-                                f"Analise detalhadamente a foto recebida da webcam: descreva quantas pessoas estão presentes, "
-                                f"identifique com precisão se há algo nas mãos (como celular, caneta, copo, documento), "
-                                f"e comente sobre roupas e o ambiente ao redor de forma natural, perspicaz e precisa.]"
+                                f" [OS OLHOS DO JARVIS — WEBCAM HD: Frame de alta resolução capturado da webcam em tempo real. "
+                                f"O mentor cadastrado chama-se {user_label}. Analise a foto minuciosamente: "
+                                f"1) Identifique todas as pessoas diante da câmera — confirme se a pessoa em destaque é {user_label} e se há outras pessoas ao lado; "
+                                f"2) Inspecione com muita atenção as mãos das pessoas e identifique exatamente qualquer objeto segurado (como celular, caneta, copo, chaves, ferramentas, documentos); "
+                                f"3) Descreva roupas, expressões e elementos ao redor no ambiente com clareza, perspicácia e maestria.]"
                             )
                         else:
                             logger.warning("Falha ao obter frame da camera.")
                             visual_context_text = " [Câmera acionada, mas o sinal de vídeo não pôde ser lido no momento.]"
                         break
 
-            # 5. Monta o Prompt de Sistema Enriquecido com Memoria Solida do Mentor
+            # 6. Monta o Prompt de Sistema Enriquecido com Memoria Solida do Mentor
             effective_user_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Senhor"
             base_prompt = app_config.ai.system_prompt_override or DEFAULT_SYSTEM_PROMPT.format(
                 user_name=effective_user_name
             )
             system_prompt = memory_manager.prepare_augmented_system_prompt(base_prompt, clean_prompt)
 
-            # 6. Obtem Historico Recente e Ferramentas Cadastradas
+            # 7. Obtem Historico Recente e Ferramentas Cadastradas
             history = self.session.get_recent_history(limit=8)
             tools = tool_registry.get_schemas_for_ai()
 
             # Injeta contexto visual no prompt se houver
             prompt_with_context = clean_prompt + visual_context_text
 
-            # 7. Envia Requisicao para a IA com suporte a Tool Calling
+            # 8. Envia Requisicao para a IA com suporte a Tool Calling
             if self.ai_provider is None:
                 self.ai_provider = AIProviderFactory.create_provider()
 
@@ -277,7 +304,7 @@ class JarvisOrchestrator:
 
             final_text = response.text or ""
 
-            # 8. Executa Tool Calls se a IA solicitou
+            # 9. Executa Tool Calls se a IA solicitou
             if response.tool_calls:
                 state_machine.set_state(JarvisState.EXECUTING_TOOL, "Executando ferramentas locais")
                 tool_results_history = []
@@ -326,7 +353,7 @@ class JarvisOrchestrator:
                 )
                 final_text = second_response.text or final_text
 
-            # 9. Finalizacao e Resposta Falada
+            # 10. Finalizacao e Resposta Falada
             self._finalize_turn(clean_prompt, final_text, has_image=is_visual, from_voice=from_voice)
             return final_text
 

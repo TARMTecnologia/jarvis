@@ -1,6 +1,7 @@
 ﻿"""
-Gerenciador Central de Visao e Analise de Cena do JARVIS.
-Controla o preview da camera, amostragem inteligente para IA, analise de objetos na mao, celular, pessoas e ambiente em tempo real.
+Gerenciador Central de Visao, Reconhecimento Facial e Analise de Cena do JARVIS.
+Controla os "Olhos do JARVIS": captura em alta definicao, registro facial do mentor,
+diferenciacao de pessoas, identificacao de objetos na mao (celulares, copos, canetas), roupas e ambiente.
 """
 
 import time
@@ -21,9 +22,11 @@ from app.core.logging_config import get_logger
 
 logger = get_logger("vision.manager")
 
+MENTOR_FACE_PATH = Path("data") / "mentor_face_reference.jpg"
+
 
 class VisionManager:
-    """Gerenciador de alto nível para Visão Computacional do JARVIS."""
+    """Gerenciador de alto nível para os Olhos e Visão Computacional do JARVIS."""
 
     def __init__(self):
         self.camera: CameraCapture = camera_capture
@@ -71,10 +74,28 @@ class VisionManager:
             return self.processor.bgr_to_qimage(frame)
         return None
 
-    def describe_scene(self, frame: Optional[np.ndarray]) -> str:
-        """Gera uma descrição visual da cena capturada pela webcam."""
+    def save_mentor_face(self, frame: np.ndarray) -> bool:
+        """Salva uma fotografia de referência do rosto do mentor para reconhecimento contínuo."""
         if frame is None or frame.size == 0:
-            return "Câmera conectada, mas nenhum frame de vídeo foi obtido no momento."
+            return False
+
+        try:
+            MENTOR_FACE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(MENTOR_FACE_PATH), frame)
+            logger.info(f"Referência facial do mentor salva em: {MENTOR_FACE_PATH}")
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao salvar referência facial do mentor: {e}")
+            return False
+
+    def has_mentor_face_registered(self) -> bool:
+        """Verifica se há um perfil facial do mentor gravado."""
+        return MENTOR_FACE_PATH.exists()
+
+    def describe_scene(self, frame: Optional[np.ndarray]) -> str:
+        """Gera uma descrição visual preliminar dos parâmetros do frame."""
+        if frame is None or frame.size == 0:
+            return "Câmera conectada, mas nenhum sinal de vídeo foi recebido no momento."
 
         try:
             h, w = frame.shape[:2]
@@ -84,27 +105,26 @@ class VisionManager:
 
             # Nível de iluminação
             if mean_brightness < 45:
-                light_desc = "ambiente com pouca iluminação / baixa luminosidade"
+                light_desc = "ambiente com pouca luz"
             elif mean_brightness > 195:
-                light_desc = "ambiente com iluminação intensa / contraluz"
+                light_desc = "ambiente com iluminação muito forte"
             else:
-                light_desc = "ambiente interno bem iluminado"
+                light_desc = "ambiente com boa iluminação"
 
-            # Foco e nitidez
-            focus_desc = "foco nítido" if laplacian_focus > 70 else "imagem suave"
+            focus_desc = "foco nítido" if laplacian_focus > 60 else "foco suave"
+            has_mentor = "Perfil facial do mentor cadastrado" if self.has_mentor_face_registered() else "Perfil facial aguardando cadastro"
 
             return (
-                f"Webcam ativa (resolução {w}x{h}). Imagem capturada com sucesso, {light_desc}, {focus_desc}. "
-                f"Analise todos os detalhes: pessoas presentes, objetos segurados nas mãos (celular, copo, caneta, chaves), "
-                f"roupas, expressões faciais e elementos do ambiente."
+                f"Webcam em alta definição ({w}x{h}, {light_desc}, {focus_desc}). "
+                f"Status: {has_mentor}."
             )
         except Exception as e:
             logger.error(f"Erro ao descrever cena da camera: {e}")
-            return "Webcam ativa capturando a imagem do mentor em frente ao computador."
+            return "Webcam ativa capturando o ambiente em frente ao computador."
 
     def capture_frame_for_ai(self, force: bool = False) -> Optional[bytes]:
         """
-        Captura um frame comprimido em JPEG de alta resolução para a IA multimodal.
+        Captura um frame em alta definição JPEG (qualidade 95) para a IA multimodal.
         """
         frame = self.camera.get_latest_frame()
         if frame is None:
@@ -129,19 +149,19 @@ class VisionManager:
 
         resized = self.processor.resize_frame(
             frame,
-            max_width=app_config.vision.resolution_width,
-            max_height=app_config.vision.resolution_height
+            max_width=max(1280, app_config.vision.resolution_width),
+            max_height=max(720, app_config.vision.resolution_height)
         )
         jpeg_bytes = self.processor.compress_to_jpeg_bytes(
             resized,
-            quality=app_config.vision.jpeg_quality
+            quality=95
         )
 
-        logger.info(f"Frame de câmera capturado com sucesso para IA ({len(jpeg_bytes) if jpeg_bytes else 0} bytes).")
+        logger.info(f"Frame HD da câmera capturado para a IA ({len(jpeg_bytes) if jpeg_bytes else 0} bytes).")
         return jpeg_bytes
 
     def take_photo(self, save_to_desktop: bool = True) -> Dict[str, Any]:
-        """Tira uma foto em alta definicao com a camera e salva em arquivo se solicitado."""
+        """Tira uma foto em alta definicao com a camera e salva na Area de Trabalho se solicitado."""
         frame = self.camera.get_latest_frame()
         if frame is None:
             frame = self.camera.capture_frame_sync()
@@ -184,7 +204,7 @@ def tool_take_photo(save_to_desktop: bool = True) -> Dict[str, Any]:
 
 @tool(
     name="look_through_camera",
-    description="Ativa a webcam em tempo real para inspecionar o que está diante da câmera: identificar pessoas, objetos segurados na mão (celular, documento, copo), ambiente ao redor ou textos.",
+    description="Ativa os olhos da webcam em tempo real para inspecionar o que está diante da câmera: identificar pessoas, diferenciar quem é quem, identificar objetos segurados na mão (celular, documento, copo, caneta), roupas e o ambiente ao redor.",
     permission_level=PermissionLevel.SAFE
 )
 def look_through_camera() -> Dict[str, Any]:
