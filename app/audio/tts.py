@@ -1,7 +1,6 @@
 ﻿"""
 Motor Hibrido de Sintese de Voz (Text-To-Speech) EXCLUSIVAMENTE MASCULINO para o JARVIS.
-Utiliza vozes neurais masculinas de alta definicao (Edge-TTS pt-BR-Antonio / pt-BR-Fabio) com fallback offline para vozes masculinas SAPI5 (Microsoft Daniel).
-Garante que a fala nunca seja cortada e reproduza do inicio ao fim.
+Voz neural masculina de alta definicao acelerada (+25% speed) e interrupcao instantanea (<20ms).
 """
 
 import asyncio
@@ -22,14 +21,13 @@ DEFAULT_MALE_NEURAL_VOICE = "pt-BR-AntonioNeural"
 
 
 class LocalTTS:
-    """Motor de síntese de voz 100% masculino para o JARVIS."""
+    """Motor de síntese de voz 100% masculino e ágil para o JARVIS."""
 
     def __init__(self):
         self._lock = threading.Lock()
         self._is_speaking = False
         self._stop_requested = False
 
-        # Garante que a voz configurada seja masculina
         if not app_config.audio.tts_voice_id or "maria" in app_config.audio.tts_voice_id.lower() or "francisca" in app_config.audio.tts_voice_id.lower():
             app_config.audio.tts_voice_id = DEFAULT_MALE_NEURAL_VOICE
             app_config.save()
@@ -37,13 +35,12 @@ class LocalTTS:
     def list_voices(self) -> List[Dict[str, Any]]:
         """Lista EXCLUSIVAMENTE vozes masculinas disponiveis no sistema e neurais."""
         male_voices = [
-            {"id": "pt-BR-AntonioNeural", "name": "JARVIS Neural — Antonio (Masculino PT-BR Principal)", "gender": "Masculino"},
+            {"id": "pt-BR-AntonioNeural", "name": "JARVIS Neural — Antonio (Masculino PT-BR Rápido)", "gender": "Masculino"},
             {"id": "pt-BR-FabioNeural", "name": "JARVIS Neural — Fábio (Masculino PT-BR Alternativo)", "gender": "Masculino"},
             {"id": "en-US-GuyNeural", "name": "JARVIS Neural — Guy (Masculino EN-US)", "gender": "Masculino"},
             {"id": "en-US-ChristopherNeural", "name": "JARVIS Neural — Christopher (Masculino EN-US)", "gender": "Masculino"},
         ]
 
-        # Busca vozes locais SAPI5 e filtra estritamente por masculinas
         pythoncom.CoInitialize()
         try:
             engine = pyttsx3.init("sapi5")
@@ -65,7 +62,7 @@ class LocalTTS:
 
     def speak(self, text: str, on_start: Optional[Callable[[], None]] = None, on_end: Optional[Callable[[], None]] = None) -> None:
         """
-        Sintetiza e reproduz o texto com voz masculina completa e ininterrupta.
+        Sintetiza e reproduz o texto com voz masculina rápida e fluida.
         """
         clean_text = text.strip()
         if not clean_text or app_config.system.silent_mode:
@@ -106,12 +103,13 @@ class LocalTTS:
                     pass
 
     def _speak_neural(self, text: str, voice_name: str) -> bool:
-        """Sintetiza voz neural masculina de alta definicao via Edge-TTS."""
+        """Sintetiza voz neural masculina de alta velocidade via Edge-TTS (+25% rate)."""
         try:
             import edge_tts
 
             async def _generate():
-                communicate = edge_tts.Communicate(text, voice_name)
+                # Acelera a fala em +25% para ritmo moderno e perspicaz
+                communicate = edge_tts.Communicate(text, voice_name, rate="+25%")
                 audio_buffer = io.BytesIO()
                 async for chunk in communicate.stream():
                     if self._stop_requested:
@@ -134,7 +132,14 @@ class LocalTTS:
 
             dev_idx = app_config.audio.output_device_index
             sounddevice.play(data, samplerate=sr, device=dev_idx)
-            sounddevice.wait() # Aguarda a reproducao completa da frase sem cortar
+            
+            # Loop de reprodução com checagem de parada a cada 20ms para parada instantânea
+            while sounddevice.get_stream() and sounddevice.get_stream().active:
+                if self._stop_requested:
+                    sounddevice.stop()
+                    break
+                sounddevice.sleep(20)
+
             return True
 
         except Exception as e:
@@ -142,11 +147,11 @@ class LocalTTS:
             return False
 
     def _speak_sapi5(self, text: str, voice_id: Optional[str] = None) -> None:
-        """Fallback offline nativo masculino via Windows SAPI5."""
+        """Fallback offline nativo masculino via Windows SAPI5 (taxa acelerada)."""
         pythoncom.CoInitialize()
         try:
             engine = pyttsx3.init("sapi5")
-            engine.setProperty("rate", app_config.audio.tts_rate or 190)
+            engine.setProperty("rate", 220)
             engine.setProperty("volume", app_config.audio.tts_volume or 1.0)
 
             if voice_id and "HKEY" in voice_id:
@@ -165,7 +170,7 @@ class LocalTTS:
             pythoncom.CoUninitialize()
 
     def stop(self) -> None:
-        """Interrompe a fala se requisitado explicitamente."""
+        """Interrompe a fala no mesmo instante (<20ms)."""
         with self._lock:
             self._stop_requested = True
             self._is_speaking = False

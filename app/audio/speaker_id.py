@@ -1,7 +1,6 @@
 ﻿"""
 Modulo de Identificacao de Voz e Verificacao do Mentor (Speaker ID) para o JARVIS.
 Permite reconhecer e filtrar apenas a voz do dono/mentor atraves de impressao vocal acustica (Voiceprint).
-Blindado contra NaNs, sub-normais e ruidos.
 """
 
 import os
@@ -41,10 +40,9 @@ class SpeakerIdentifier:
 
     def _extract_acoustic_features(self, audio: np.ndarray, sr: int = 16000) -> Optional[np.ndarray]:
         """Extrai vetor numerico estavel de caracteristicas acusticas (energia, espectro, ZCR e sub-bandas)."""
-        if audio is None or len(audio) < 1600:  # Minimo 100ms
+        if audio is None or len(audio) < 1600:
             return None
 
-        # Garante float32 e remove NaN/Infs
         sig = np.nan_to_num(audio.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
         max_val = float(np.max(np.abs(sig)))
         if max_val > 1e-5:
@@ -52,8 +50,8 @@ class SpeakerIdentifier:
         else:
             return None
 
-        frame_size = int(sr * 0.03)  # 30ms
-        hop_size = int(sr * 0.015)   # 15ms
+        frame_size = int(sr * 0.03)
+        hop_size = int(sr * 0.015)
         
         num_frames = max(1, (len(sig) - frame_size) // hop_size)
         if num_frames < 2:
@@ -80,7 +78,7 @@ class SpeakerIdentifier:
             spectral_centroid = 0.0
         features.append(spectral_centroid / (sr / 2.0))
 
-        # 4. Energias em 16 sub-bandas de frequencia
+        # 4. Energias em 16 sub-bandas
         num_bands = 16
         band_size = len(fft_vals) // num_bands
         if band_size > 0:
@@ -95,8 +93,7 @@ class SpeakerIdentifier:
         vec = np.nan_to_num(np.array(features, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
         norm = float(np.linalg.norm(vec))
         if norm > 1e-6:
-            vec = vec / norm
-            return vec
+            return vec / norm
         return None
 
     def enroll_mentor_voice(self, audio: np.ndarray, sr: int = 16000) -> bool:
@@ -132,45 +129,30 @@ class SpeakerIdentifier:
             return True, 1.0
 
         if self.mentor_voiceprint is None or len(self.mentor_voiceprint) == 0:
-            # Se ainda nao havia perfil, calibra na primeira fala
             self.enroll_mentor_voice(audio, sr)
             return True, 1.0
 
         feat = self._extract_acoustic_features(audio, sr)
         if feat is None:
-            return True, 0.8  # Se audio for muito curto mas o VAD passou, nao bloqueia o mentor
+            return True, 0.5
 
-        similarity = float(np.dot(feat, self.mentor_voiceprint))
-        if np.isnan(similarity) or np.isinf(similarity):
-            logger.warning("Similaridade calculada retornou NaN, auto-recalibrando...")
-            self.enroll_mentor_voice(audio, sr)
-            return True, 1.0
+        similarity = float(np.dot(self.mentor_voiceprint, feat))
+        if np.isnan(similarity):
+            similarity = 0.5
 
-        similarity = max(0.0, min(1.0, similarity))
-        threshold = getattr(app_config.audio, "mentor_voice_similarity_threshold", 0.45)
-
-        is_mentor = similarity >= threshold
-        if is_mentor:
-            logger.info(f"Voz do mentor reconhecida (Similaridade: {similarity:.2f} >= {threshold:.2f}).")
-            # Auto-adaptacao suave
-            self.mentor_voiceprint = 0.92 * self.mentor_voiceprint + 0.08 * feat
-            norm = float(np.linalg.norm(self.mentor_voiceprint))
-            if norm > 1e-6:
-                self.mentor_voiceprint = self.mentor_voiceprint / norm
-        else:
-            logger.warning(f"Voz rejeitada (Similaridade: {similarity:.2f} < {threshold:.2f} — possivel terceiro ou ruido).")
-
-        return is_mentor, similarity
+        threshold = 0.38
+        is_match = similarity >= threshold
+        logger.info(f"Verificacao Speaker ID: Similaridade={similarity:.2f} (Threshold={threshold}) -> Match: {is_match}")
+        return is_match, similarity
 
     def reset_profile(self) -> None:
-        """Limpa a calibracao da voz do mentor."""
+        """Reseta o perfil de voz do mentor."""
         self.mentor_voiceprint = None
         if VOICEPRINT_FILE_PATH.exists():
             try:
                 VOICEPRINT_FILE_PATH.unlink()
-                logger.info("Perfil de voz do mentor removido.")
-            except Exception as e:
-                logger.error(f"Erro ao remover mentor_voiceprint: {e}")
+            except Exception:
+                pass
 
 
 speaker_identifier = SpeakerIdentifier()

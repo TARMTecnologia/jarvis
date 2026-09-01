@@ -1,11 +1,12 @@
 ﻿"""
 Gerenciador Central do Subsistema de Audio e Voz do JARVIS.
-Garante reproducao ininterrupta da fala do assistente sem cortes por eco e mantem dialogo fluido com janela de continuacao de 8s.
+Controla microfone, VAD, STT, Speaker ID exclusivo do mentor, supressao de ruidos e parada verbal imediata ("pare jarvis").
 """
 
 import re
 import time
 import threading
+from collections import deque
 import numpy as np
 from typing import Optional, Callable
 from app.audio.microphone import microphone, MicrophoneManager
@@ -24,7 +25,7 @@ logger = get_logger("audio.manager")
 
 
 class AudioManager:
-    """Coordenador do pipeline de escuta contínua, supressão de eco e fala sem cortes."""
+    """Coordenador do pipeline de voz, identificacao de mentor e interrupcao verbal instantanea."""
 
     def __init__(self):
         self.microphone: MicrophoneManager = microphone
@@ -39,6 +40,8 @@ class AudioManager:
         self._is_jarvis_speaking = False
         self._last_spoken_text = ""
         self._last_speech_end_time = 0.0
+        self._speaking_mic_buffer = deque(maxlen=25)  # Buffer de 0.8s durante fala para barge-in verbal
+        self._checking_barge_in = False
 
         self._setup_internal_listeners()
 
@@ -72,16 +75,32 @@ class AudioManager:
         logger.info("AudioManager desativado.")
 
     def _on_mic_frame(self, frame: np.ndarray, rms: float) -> None:
-        """Recebe frames do microfone e alimenta VU Meter e VAD."""
+        """Recebe frames do microfone, alimenta VU Meter e gerencia barge-in verbal em tempo real."""
         event_bus.publish(EventType.AUDIO_LEVEL_CHANGED, {"rms": rms})
 
-        # Quando o Jarvis está falando:
-        # NUNCA interrompe a própria fala por eco de alto-falante.
-        # Permite que ele fale toda a frase do início ao fim sem cortar.
+        # Quando o Jarvis estiver falando:
         if self._is_jarvis_speaking:
+            self._speaking_mic_buffer.append(frame)
+            # Se detectar voz alta humana por cima da fala do robô, checa comando de parada ("pare jarvis")
+            if rms > 0.035 and not self._checking_barge_in and len(self._speaking_mic_buffer) >= 15:
+                self._checking_barge_in = True
+                audio_snippet = np.concatenate(list(self._speaking_mic_buffer))
+                threading.Thread(target=self._check_stop_during_speech, args=(audio_snippet,), daemon=True).start()
             return
 
         self.vad.process_frame(frame, rms)
+
+    def _check_stop_during_speech(self, audio_data: np.ndarray) -> None:
+        """Analisa de forma ultra-rápida se o usuário disse 'pare', 'pare jarvis' ou 'silêncio' durante a fala."""
+        try:
+            quick_text = self.stt.transcribe(audio_data)
+            if quick_text and self.wakeword.is_stop_command(quick_text):
+                logger.info(f"Comando de parada verbal detectado durante a fala: '{quick_text}'. Interrompendo imediatamente!")
+                self.interrupt_speech()
+        except Exception as e:
+            logger.debug(f"Erro ao checar comando de parada: {e}")
+        finally:
+            self._checking_barge_in = False
 
     def _on_user_speech_start(self) -> None:
         """Disparado no exato instante em que o usuário começa a falar."""
@@ -100,14 +119,24 @@ class AudioManager:
         ).start()
 
     def _process_transcription_worker(self, audio_data: np.ndarray) -> None:
-        """Executa transcrição local, filtro de eco, modo ditado e validação de ativação."""
-        # 1. Transcrição STT
+        """Executa verificacao do mentor, transcrição local, filtro de eco, modo ditado e validação."""
+        # 1. Filtro Exclusivo da Voz do Mentor (Speaker ID)
+        if getattr(app_config.audio, "mentor_voice_filter_enabled", False):
+            is_mentor, similarity = self.speaker_id.is_mentor_voice(audio_data)
+            if not is_mentor:
+                user_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "meu mentor"
+                logger.info(f"Voz de terceiro rejeitada (Similaridade: {similarity:.2f}). Informando que apenas {user_name} pode comandar.")
+                rejection_msg = f"Desculpe, mas não posso ajudar porque quem está falando não é {user_name}."
+                self.speak_text(rejection_msg)
+                return
+
+        # 2. Transcrição STT
         text = self.stt.transcribe(audio_data)
         if not text or not text.strip():
             state_machine.set_state(JarvisState.IDLE, "Nenhuma fala compreendida")
             return
 
-        # 2. Supressão Inteligente de Eco (Echo Detection)
+        # 3. Supressão Inteligente de Eco
         now = time.time()
         if (now - self._last_speech_end_time) < 3.0 and self._last_spoken_text:
             text_clean = re.sub(r"[^\w\s]", "", text.lower()).strip()
@@ -117,7 +146,7 @@ class AudioManager:
                 state_machine.set_state(JarvisState.IDLE, "Eco descartado")
                 return
 
-        # 3. Modo Ditado (WisprFlow offline)
+        # 4. Modo Ditado (WisprFlow offline)
         from app.automation.dictation import dictation_manager
         if dictation_manager.is_active:
             logger.info(f"Inserindo texto ditado na janela ativa: '{text}'")
@@ -125,27 +154,27 @@ class AudioManager:
             state_machine.set_state(JarvisState.IDLE, "Texto ditado colado")
             return
 
-        # 4. Comandos de parada (Barge-in verbal)
+        # 5. Comandos de parada imediatos
         if self.wakeword.is_stop_command(text):
             logger.info(f"Comando de parada recebido via voz: '{text}'")
             self.interrupt_speech()
             state_machine.set_state(JarvisState.IDLE, "Comando de parada")
             return
 
-        # 5. Verifica ativação (Wake Word ou Janela de Continuação de 8s)
+        # 6. Verifica ativação (Wake Word ou Janela de Continuação de 8s)
         activated, clean_prompt = self.wakeword.process_transcription(text)
 
         if activated:
             self.wakeword.reset_followup()
             event_bus.publish(
                 EventType.USER_TRANSCRIPTION_RECEIVED,
-                {"text": clean_prompt or text, "raw_transcription": text}
+                {"text": clean_prompt or text, "raw_transcription": text, "audio_data": audio_data}
             )
         else:
             state_machine.set_state(JarvisState.IDLE, "Aguardando wake word")
 
     def speak_text(self, text: str, on_finished: Optional[Callable[[], None]] = None) -> None:
-        """Fala a resposta do Jarvis usando TTS local masculino sem cortes."""
+        """Fala a resposta do Jarvis usando voz masculina neural acelerada e fluida."""
         if not text or not text.strip() or app_config.system.silent_mode:
             if on_finished:
                 on_finished()
@@ -153,6 +182,7 @@ class AudioManager:
 
         def _worker():
             self._is_jarvis_speaking = True
+            self._speaking_mic_buffer.clear()
             self._last_spoken_text = text[:150]
             state_machine.set_state(JarvisState.SPEAKING, "Sintetizando voz do assistente")
             event_bus.publish(EventType.SPEAKER_STARTED, {"text": text})
@@ -161,6 +191,7 @@ class AudioManager:
                 self.tts.speak(text)
             finally:
                 self._is_jarvis_speaking = False
+                self._speaking_mic_buffer.clear()
                 self._last_speech_end_time = time.time()
                 # Inicia janela de continuação de diálogo de 8 segundos
                 self.wakeword.start_followup_window(8.0)
@@ -175,11 +206,13 @@ class AudioManager:
         threading.Thread(target=_worker, daemon=True).start()
 
     def interrupt_speech(self) -> None:
-        """Interrompe a fala do Jarvis imediatamente se requisitado."""
+        """Interrompe a fala do Jarvis imediatamente (<20ms)."""
         self._is_jarvis_speaking = False
+        self._speaking_mic_buffer.clear()
         self.tts.stop()
         self.speaker.stop()
         self.wakeword.reset_followup()
+        state_machine.set_state(JarvisState.IDLE, "Fala interrompida pelo mentor")
         event_bus.publish(EventType.SPEAKER_INTERRUPTED)
 
 
