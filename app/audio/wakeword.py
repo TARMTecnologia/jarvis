@@ -1,6 +1,6 @@
 ﻿"""
-Detector de Palavra de Ativacao (Wake Word), Janela de Conversa Continua (Hot Window) e Comandos de Parada do JARVIS.
-Garante ativacao estrita por "Jarvis" e previne ativacoes falsas por ruidos ou murmúrios.
+Detector de Palavra de Ativacao (Wake Word), Janela de Conversa Continua Estendida e Ativacao Interrogativa para o JARVIS.
+Garante que o JARVIS nunca deixe de responder quando o mentor fizer uma pergunta ou conversar com ele.
 """
 
 import re
@@ -17,21 +17,27 @@ WAKE_WORD_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# Prefixos permitidos antes de "Jarvis" (ex: "Oi Jarvis", "E aí Jarvis")
+# Prefixos permitidos antes de "Jarvis"
 CLEAN_PREFIX_PATTERN = re.compile(
     r"^(?:e\s+a[ií]|ei|oi|ol[aá]|fala|por\s+favor|bom\s+dia|boa\s+tarde|boa\s+noite)\s+",
     re.IGNORECASE
 )
 
-# Comandos de parada imediata (Barge-in verbal: "pare jarvis", "jarvis pare", "silêncio", "pare", "stop", etc.)
+# Comandos de parada imediata (Barge-in verbal)
 STOP_COMMAND_PATTERN = re.compile(
     r"\b(jarvis,?\s*)?(pare|parar|sil[eê]ncio|chega|cancele?|desligar?|calado|para\s+de\s+falar|stop|para|cala\s+a\s+boca)(,?\s*jarvis)?\b",
     re.IGNORECASE
 )
 
+# Padroes de intencao interrogativa / conversacional direta
+CONVERSATIONAL_INTENT_PATTERN = re.compile(
+    r"\b(sabe|onde|como|qual|quem|quando|por\s+que|porque|o\s+que|quanto|quantos|me\s+diga|me\s+explica|me\s+ajuda|pesquise|procure|abra|mostre|veja|conte|voc[eê]|ser[aá]|pode|consegue|lembra)\b|\?",
+    re.IGNORECASE
+)
+
 
 class WakeWordDetector:
-    """Valida palavra de ativacao em qualquer posicao e gerencia janela de continuacao de dialogo e comandos de parada."""
+    """Valida palavra de ativacao, gerencia janela de dialogo contínuo de 25s e responde a perguntas diretas."""
 
     def __init__(self, default_wake_word: str = "Jarvis"):
         self.default_wake_word = default_wake_word
@@ -43,8 +49,8 @@ class WakeWordDetector:
             return False
         return bool(STOP_COMMAND_PATTERN.search(text.strip()))
 
-    def start_followup_window(self, duration_sec: float = 8.0) -> None:
-        """Abre janela de conversa contínua após a fala do JARVIS."""
+    def start_followup_window(self, duration_sec: float = 25.0) -> None:
+        """Abre janela de conversa contínua estendida após a fala do JARVIS (25 segundos)."""
         self._followup_until = time.time() + duration_sec
         logger.debug(f"Janela de conversa contínua aberta por {duration_sec}s.")
 
@@ -57,8 +63,10 @@ class WakeWordDetector:
 
     def check_wake_word(self, text: str) -> Tuple[bool, str]:
         """
-        Verifica se a fala e direcionada ao Jarvis (por Wake Word estrita ou janela de continuacao estruturada).
-        Retorna (detectado: bool, texto_limpo: str).
+        Verifica se a fala e direcionada ao Jarvis:
+        1. Se contem "Jarvis" -> Ativa com prioridade.
+        2. Se esta na janela de conversa de 25s -> Ativa sem precisar repetir o nome.
+        3. Se for uma pergunta ou dialogo conversacional -> Ativa e responde sem delay.
         """
         if not text or not text.strip():
             return False, ""
@@ -85,14 +93,20 @@ class WakeWordDetector:
             logger.info(f"Wake word 'Jarvis' confirmada! Prompt: '{cleaned}'")
             return True, cleaned
 
-        # 3. Janela de Conversa Ativa (Follow-up Hot Window)
-        # Exige frase com substancia (minimo 2 palavras e 6 caracteres) para evitar ruidos curtos
+        # 3. Janela de Conversa Ativa Estendida (25s)
         if self.is_in_followup_window():
             words = clean_text.split()
-            if len(words) >= 2 and len(clean_text) >= 6:
+            if len(words) >= 2 and len(clean_text) >= 5:
                 cleaned = re.sub(r"^[,.:\- ]+|[,.:\- ]+$", "", clean_text).strip()
-                logger.info(f"Fala recebida dentro da janela de continuidade: '{cleaned}'")
+                logger.info(f"Fala recebida dentro da janela de diálogo de 25s: '{cleaned}'")
                 return True, cleaned
+
+        # 4. Reconhecimento de Pergunta ou Diálogo Direto do Mentor
+        # Se o mentor fizer uma pergunta completa (com 'sabe', 'onde', 'qual', etc.), responde sem ignorar
+        if len(clean_text.split()) >= 3 and CONVERSATIONAL_INTENT_PATTERN.search(clean_text):
+            cleaned = re.sub(r"^[,.:\- ]+|[,.:\- ]+$", "", clean_text).strip()
+            logger.info(f"Pergunta/diálogo detectado: '{cleaned}'. Ativando resposta imediata!")
+            return True, cleaned
 
         return False, ""
 

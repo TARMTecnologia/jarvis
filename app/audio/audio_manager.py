@@ -1,6 +1,6 @@
 ﻿"""
 Gerenciador Central do Subsistema de Audio e Voz do JARVIS.
-Controla microfone, VAD, STT, Speaker ID exclusivo do mentor, supressao de ruidos e parada verbal imediata ("pare jarvis").
+Controla microfone, VAD, STT, Speaker ID exclusivo do mentor, supressao de ruidos e janela de dialogo extendida de 25s.
 """
 
 import re
@@ -25,7 +25,7 @@ logger = get_logger("audio.manager")
 
 
 class AudioManager:
-    """Coordenador do pipeline de voz, identificacao de mentor e interrupcao verbal instantanea."""
+    """Coordenador do pipeline de voz, identificacao de mentor e dialogo continuo sem delay."""
 
     def __init__(self):
         self.microphone: MicrophoneManager = microphone
@@ -40,7 +40,7 @@ class AudioManager:
         self._is_jarvis_speaking = False
         self._last_spoken_text = ""
         self._last_speech_end_time = 0.0
-        self._speaking_mic_buffer = deque(maxlen=25)  # Buffer de 0.8s durante fala para barge-in verbal
+        self._speaking_mic_buffer = deque(maxlen=25)
         self._checking_barge_in = False
 
         self._setup_internal_listeners()
@@ -81,7 +81,6 @@ class AudioManager:
         # Quando o Jarvis estiver falando:
         if self._is_jarvis_speaking:
             self._speaking_mic_buffer.append(frame)
-            # Se detectar voz alta humana por cima da fala do robô, checa comando de parada ("pare jarvis")
             if rms > 0.035 and not self._checking_barge_in and len(self._speaking_mic_buffer) >= 15:
                 self._checking_barge_in = True
                 audio_snippet = np.concatenate(list(self._speaking_mic_buffer))
@@ -91,11 +90,11 @@ class AudioManager:
         self.vad.process_frame(frame, rms)
 
     def _check_stop_during_speech(self, audio_data: np.ndarray) -> None:
-        """Analisa de forma ultra-rápida se o usuário disse 'pare', 'pare jarvis' ou 'silêncio' durante a fala."""
+        """Analisa se o usuário disse 'pare', 'pare jarvis' ou 'silêncio' durante a fala."""
         try:
             quick_text = self.stt.transcribe(audio_data)
             if quick_text and self.wakeword.is_stop_command(quick_text):
-                logger.info(f"Comando de parada verbal detectado durante a fala: '{quick_text}'. Interrompendo imediatamente!")
+                logger.info(f"Comando de parada verbal detectado: '{quick_text}'. Interrompendo fala!")
                 self.interrupt_speech()
         except Exception as e:
             logger.debug(f"Erro ao checar comando de parada: {e}")
@@ -119,7 +118,7 @@ class AudioManager:
         ).start()
 
     def _process_transcription_worker(self, audio_data: np.ndarray) -> None:
-        """Executa verificacao do mentor, transcrição local, filtro de eco, modo ditado e validação."""
+        """Executa verificacao do mentor, transcrição ultra-rápida, filtro de eco e validação."""
         # 1. Filtro Exclusivo da Voz do Mentor (Speaker ID)
         if getattr(app_config.audio, "mentor_voice_filter_enabled", False):
             is_mentor, similarity = self.speaker_id.is_mentor_voice(audio_data)
@@ -161,7 +160,7 @@ class AudioManager:
             state_machine.set_state(JarvisState.IDLE, "Comando de parada")
             return
 
-        # 6. Verifica ativação (Wake Word ou Janela de Continuação de 8s)
+        # 6. Validação de ativação (Wake Word, Janela Contínua de 25s ou Pergunta Direta)
         activated, clean_prompt = self.wakeword.process_transcription(text)
 
         if activated:
@@ -171,7 +170,8 @@ class AudioManager:
                 {"text": clean_prompt or text, "raw_transcription": text, "audio_data": audio_data}
             )
         else:
-            state_machine.set_state(JarvisState.IDLE, "Aguardando wake word")
+            logger.info(f"Fala não direcionada ao JARVIS: '{text}'. Permanecendo em espera.")
+            state_machine.set_state(JarvisState.IDLE, "Aguardando comando")
 
     def speak_text(self, text: str, on_finished: Optional[Callable[[], None]] = None) -> None:
         """Fala a resposta do Jarvis usando voz masculina neural acelerada e fluida."""
@@ -193,8 +193,8 @@ class AudioManager:
                 self._is_jarvis_speaking = False
                 self._speaking_mic_buffer.clear()
                 self._last_speech_end_time = time.time()
-                # Inicia janela de continuação de diálogo de 8 segundos
-                self.wakeword.start_followup_window(8.0)
+                # Inicia janela de continuação de diálogo de 25 segundos
+                self.wakeword.start_followup_window(25.0)
                 event_bus.publish(EventType.SPEAKER_FINISHED)
                 state_machine.set_state(JarvisState.IDLE, "Ouvindo continuação do diálogo")
                 if on_finished:
