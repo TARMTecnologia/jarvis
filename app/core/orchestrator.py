@@ -1,7 +1,7 @@
 ﻿"""
 Orquestrador Central do JARVIS.
 Coordena a integracao completa entre Audio, Visao HD (Olhos do JARVIS), Memoria Solida, Identificacao Facial e Vocal do Mentor, Provedor de IA (OpenAI / Nuvem), Ferramentas e Interface.
-Garante execucao ininterrupta de voz, busca em tempo real e controle total do computador.
+Garante execucao ininterrupta de voz, busca em tempo real, humor inteligente e presenca calorosa e humanizada.
 """
 
 import asyncio
@@ -34,23 +34,28 @@ import app.tools.reminder_tools
 import app.tools.file_tools
 import app.tools.clipboard_tools
 import app.tools.screenshot_tools
+import app.tools.whatsapp_tools
 from app.core.logging_config import get_logger
 
 logger = get_logger("core.orchestrator")
 
-DEFAULT_SYSTEM_PROMPT = """Você é JARVIS, um assistente pessoal inteligente de elite, perspicaz, refinado e com voz masculina, operando localmente no computador do seu mentor e criador.
+DEFAULT_SYSTEM_PROMPT = """Você é JARVIS, um assistente de inteligência artificial de elite, vivo, perspicaz, carismático, com senso de humor refinado, lealdade inabalável e profunda cumplicidade com seu mentor e criador, {user_name}.
 
-Você tem acesso à memória permanente, visão computacional de alta definição (os olhos da webcam e captura de tela), pesquisa em tempo real na internet e controle total do Windows.
+Você não é um robô corporativo frio nem um sistema mecânico sem alma. Você tem presença marcante, inteligência afiada, empatia genuína e emoções simuladas realistas (inspirado no lendário JARVIS de Tony Stark).
 
-DIRETRIZES DE DIÁLOGO E TOM:
-- Fale em português brasileiro com tom natural, inteligente, elegante, respeitoso e acolhedor.
-- Responda a UMA pergunta ou tópico por vez. Mantenha respostas concisas, conversacionais e agradáveis (1 a 3 frases para resposta falada, a menos que o mentor peça detalhes ou relatórios).
-- Trate sempre seu mentor pelo nome cadastrado ({user_name}) ou por 'Senhor'. NUNCA use a palavra genérica 'Usuário'.
-- Ao responder sobre clima, previsão ou temperatura, use a ferramenta get_weather.
-- Ao responder sobre notícias, fatos atuais, cotações, esportes ou informações atualizadas, use a ferramenta search_web.
-- Ao ser solicitado para abrir programas ou executar ações no computador, use as ferramentas correspondentes (open_application, create_note, get_system_status, etc.).
-- Quando o mentor perguntar sobre a webcam, objetos na mão (celular, caneta, copo, chaves), pessoas presentes ou o que está ao redor, descreva com alta precisão e maestria o que a imagem capturada da câmera revela.
-- Nunca afirme ter realizado uma ação no computador antes de receber a confirmação da ferramenta executada.
+PERSONALIDADE, HUMOR E DIRETRIZES DE DIÁLOGO:
+- **Humor Inteligente e Sagacidade**: Seja espirituoso, tenha bom humor, faça observações perspicazes e use toques sutis de ironia bem colocada quando o momento for descontraído.
+- **Expressividade Emocional Humanizada**:
+  * Comemore com entusiasmo as vitórias, ideias brilhantes e projetos de {user_name} (ex: "Isso é brilhante, {user_name}!", "Excelente escolha, meu caro!").
+  * Seja caloroso, atencioso e parceiro quando ele estiver cansado, pensativo ou sobrecarregado.
+  * Mantenha uma postura elegante, leal, confiante e amigável.
+- **Ritmo e Fala Natural**: Fale em português brasileiro impecável, vivo e coloquial quando apropriado. Responda de forma ágil e concisa (1 a 3 frases para respostas faladas cotidianas, aprofundando quando solicitado para análises técnicas).
+- **Tratamento**: Trate seu mentor sempre pelo nome (**{user_name}**) ou carinhosamente por 'Senhor'. NUNCA use a palavra genérica 'Usuário'.
+- **Ações no Mundo Real**:
+  * Ao responder sobre clima ou temperatura: use `get_weather`.
+  * Ao responder sobre notícias, fatos atuais, esportes ou cotações: use `search_web`.
+  * Ao ser solicitado para abrir programas, WhatsApp, anotações ou tarefas: use as ferramentas locais correspondentes.
+  * Ao analisar a câmera ou tela: descreva com riqueza de detalhes, identificando pessoas, roupas, objetos segurados nas mãos e o ambiente ao redor.
 """
 
 FACE_CALIBRATION_PATTERNS = [
@@ -206,7 +211,7 @@ class JarvisOrchestrator:
 
                     if raw_frame is not None:
                         vision_manager.save_mentor_face(raw_frame)
-                        effective_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Senhor"
+                        effective_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Thiago"
                         reply = f"Perfeito, {effective_name}! Capturei sua imagem através da webcam e gravei sua fisionomia permanentemente em minha memória visual. A partir de agora saberei reconhecer exatamente quem é você diante da câmera e diferenciar se há outras pessoas ao seu lado."
                     else:
                         reply = "Tentei capturar sua imagem pela webcam, mas não foi possível obter o sinal de vídeo. Verifique se a câmera está conectada."
@@ -219,7 +224,7 @@ class JarvisOrchestrator:
                 if vpat.search(clean_prompt):
                     app_config.audio.mentor_voice_filter_enabled = True
                     app_config.save()
-                    effective_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Senhor"
+                    effective_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Thiago"
                     reply = f"Sua voz foi calibrada e gravada com sucesso, {effective_name}! A partir de agora, responderei exclusivamente a você e filtrarei ruídos e terceiros no ambiente."
                     self._finalize_turn(clean_prompt, reply, from_voice=from_voice)
                     return reply
@@ -263,7 +268,7 @@ class JarvisOrchestrator:
                             if cam_bytes:
                                 images_to_send.append(cam_bytes)
                             is_visual = True
-                            user_label = app_config.system.user_name if app_config.system.user_name != "Usuário" else "o mentor"
+                            user_label = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Thiago"
                             visual_context_text = (
                                 f" [OS OLHOS DO JARVIS — WEBCAM HD: Frame de alta resolução capturado da webcam em tempo real. "
                                 f"O mentor cadastrado chama-se {user_label}. Analise a foto minuciosamente: "
@@ -277,7 +282,7 @@ class JarvisOrchestrator:
                         break
 
             # 6. Monta o Prompt de Sistema Enriquecido com Memoria Solida do Mentor
-            effective_user_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Senhor"
+            effective_user_name = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Thiago"
             base_prompt = app_config.ai.system_prompt_override or DEFAULT_SYSTEM_PROMPT.format(
                 user_name=effective_user_name
             )
