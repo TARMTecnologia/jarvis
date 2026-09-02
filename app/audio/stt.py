@@ -1,6 +1,6 @@
 ﻿"""
 Motor Hibrido de Transcricao de Fala (Speech-To-Text) para o JARVIS.
-Suporta Whisper Local (Faster-Whisper int8 100% Offline) e OpenAI Whisper Cloud com filtro rigido de ruidos e alucinacoes (como amara.org, legendas, etc).
+Suporta Whisper Local (Faster-Whisper int8 100% Offline) e OpenAI Whisper Cloud com filtro rigido de ruidos e alucinacoes (como amara.org, "voce fala portugues", "e ai", etc).
 """
 
 import io
@@ -15,7 +15,7 @@ from app.core.logging_config import get_logger
 
 logger = get_logger("audio.stt")
 
-# Filtros para alucinacoes comuns do Whisper geradas por ruido de ar/microfone
+# Filtros para alucinacoes comuns do Whisper geradas por ruido de ar, microfone ou silêncio
 HALLUCINATION_PATTERNS = [
     re.compile(r".*amara\.org.*", re.IGNORECASE),
     re.compile(r".*comunidade\s+da\s+amara.*", re.IGNORECASE),
@@ -25,6 +25,9 @@ HALLUCINATION_PATTERNS = [
     re.compile(r".*obrigado\s+por\s+assistir.*", re.IGNORECASE),
     re.compile(r".*inscreva-?se\s+no\s+canal.*", re.IGNORECASE),
     re.compile(r".*deixe\s+o\s+like.*", re.IGNORECASE),
+    re.compile(r"^\s*(?:voc[eê]\s+fala\s+portugu[eê]s\??|fala\s+portugu[eê]s\??)\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(?:e\s+a[ií]\??|i\s+ai\??|e\s+ai\??|eai\??)\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(?:ol[aá]|oi|sim|n[aã]o|ok|hum|ah|eh|tchau|bye)\.?\s*$", re.IGNORECASE),
     re.compile(r"^\s*\[(?:m[uú]sica|ru[ií]do|aplausos|sil[eê]ncio|som|risos|m[uú]sica\s+de\s+fundo)\]\s*$", re.IGNORECASE),
     re.compile(r"^\s*[.,;:!?_\-\s]+\s*$"),
     re.compile(r"^\s*(?:you|thank\s+you|bye|subtitles|welcome)\.?\s*$", re.IGNORECASE)
@@ -79,7 +82,7 @@ class LocalSTT:
 
         return np.clip(sig, -1.0, 1.0)
 
-    def _is_hallucination(self, text: str) -> bool:
+    def is_hallucination(self, text: str) -> bool:
         """Verifica se o texto retornado e apenas uma alucinacao de ruido de fundo."""
         if not text or len(text.strip()) < 2:
             return True
@@ -98,7 +101,7 @@ class LocalSTT:
 
         # Verifica energia do sinal (se for ruido absoluto puro, descarta)
         rms = float(np.sqrt(np.mean(audio_data ** 2)))
-        if rms < 0.002:
+        if rms < 0.004:
             logger.debug(f"Segmento de audio com energia muito baixa ({rms:.5f}), descartado.")
             return ""
 
@@ -109,14 +112,14 @@ class LocalSTT:
             openai_key = secrets_manager.get_api_key("openai")
             if openai_key:
                 cloud_text = self._transcribe_openai_cloud(norm_audio, sample_rate, openai_key)
-                if cloud_text and cloud_text.strip() and not self._is_hallucination(cloud_text):
+                if cloud_text and cloud_text.strip() and not self.is_hallucination(cloud_text):
                     return cloud_text
                 logger.warning("Transcricao OpenAI Cloud vazia ou ruido. Usando Whisper Local.")
 
         # 2. Transcricao Local via Faster-Whisper
         raw_text = self._transcribe_local(norm_audio, sample_rate)
-        if self._is_hallucination(raw_text):
-            logger.debug(f"Alucinacao de ruido descartada: '{raw_text}'")
+        if self.is_hallucination(raw_text):
+            logger.info(f"Alucinacao de ruido descartada: '{raw_text}'")
             return ""
         return raw_text
 
@@ -134,7 +137,7 @@ class LocalSTT:
                 beam_size=5,
                 temperature=[0.0, 0.2, 0.4],
                 vad_filter=False,
-                initial_prompt="Conversa em português brasileiro com o assistente Jarvis.",
+                initial_prompt="Comando para o assistente Jarvis em português brasileiro.",
                 condition_on_previous_text=False
             )
 
