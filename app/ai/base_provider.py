@@ -20,6 +20,10 @@ class ToolCallRequest:
     arguments: Dict[str, Any] = field(default_factory=dict)
 
 
+# Alias de compatibilidade
+ToolCall = ToolCallRequest
+
+
 @dataclass
 class AIResponseChunk:
     """Fragmento de resposta em streaming."""

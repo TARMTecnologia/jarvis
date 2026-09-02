@@ -1,4 +1,4 @@
-﻿"""
+"""
 Orquestrador Central do JARVIS.
 Coordena a integracao completa entre Audio, Visao HD (Olhos do JARVIS), Memoria Solida, Identificacao Facial e Vocal do Mentor, Provedor de IA (OpenAI / Nuvem), Ferramentas e Interface.
 Garante execucao ininterrupta de voz, busca em tempo real, humor inteligente e presenca calorosa e humanizada.
@@ -343,7 +343,7 @@ class JarvisOrchestrator:
                     {"role": "user", "content": prompt_with_context},
                     {
                         "role": "assistant",
-                        "content": final_text or None,
+                        "content": final_text or "",
                         "tool_calls": tool_calls_payload
                     }
                 ] + tool_results_history
