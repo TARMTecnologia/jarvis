@@ -1,6 +1,6 @@
 ﻿"""
-Detector de Palavra de Ativacao (Wake Word), Janela de Conversa Continua Estendida e Ativacao Interrogativa para o JARVIS.
-Garante que o JARVIS nunca deixe de responder quando o mentor fizer uma pergunta ou conversar com ele.
+Detector de Palavra de Ativacao (Wake Word), Janela de Conversa Continua e Comandos de Parada Rigorosos para o JARVIS.
+Garante que frases normais contendo a preposicao "para" NUNCA sejam confundidas com comandos de parada.
 """
 
 import re
@@ -23,15 +23,16 @@ CLEAN_PREFIX_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# Comandos de parada imediata (Barge-in verbal)
-STOP_COMMAND_PATTERN = re.compile(
-    r"\b(jarvis,?\s*)?(pare|parar|sil[eê]ncio|chega|cancele?|desligar?|calado|para\s+de\s+falar|stop|para|cala\s+a\s+boca)(,?\s*jarvis)?\b",
+# Comandos de parada ESTRITOS (imperativos curtos como "pare jarvis", "silêncio", "chega", "para de falar")
+# NUNCA deve casar com frases normais contendo "para" como preposicao.
+STRICT_STOP_PATTERN = re.compile(
+    r"^(?:jarvis,?\s*)?(?:pare|parar|sil[eê]ncio|chega|cancele|calado|para\s+de\s+falar|stop|cala\s+a\s+boca|fique\s+quieto)(?:\s+jarvis)?\.?$",
     re.IGNORECASE
 )
 
 # Padroes de intencao interrogativa / conversacional direta
 CONVERSATIONAL_INTENT_PATTERN = re.compile(
-    r"\b(sabe|onde|como|qual|quem|quando|por\s+que|porque|o\s+que|quanto|quantos|me\s+diga|me\s+explica|me\s+ajuda|pesquise|procure|abra|mostre|veja|conte|voc[eê]|ser[aá]|pode|consegue|lembra)\b|\?",
+    r"\b(sabe|onde|como|qual|quem|quando|por\s+que|porque|o\s+que|quanto|quantos|me\s+diga|me\s+explica|me\s+ajuda|pesquise|procure|abra|mostre|veja|conte|voc[eê]|ser[aá]|pode|consegue|lembra|escreveu|enviou|apertou)\b|\?",
     re.IGNORECASE
 )
 
@@ -44,10 +45,17 @@ class WakeWordDetector:
         self._followup_until: float = 0.0
 
     def is_stop_command(self, text: str) -> bool:
-        """Verifica se o usuario ordenou interrupcao imediata da fala do Jarvis."""
-        if not text:
+        """
+        Verifica se o usuario ordenou interrupcao imediata da fala do Jarvis.
+        Frases com mais de 4 palavras NUNCA sao tratadas como comando de parada isolado.
+        """
+        if not text or not text.strip():
             return False
-        return bool(STOP_COMMAND_PATTERN.search(text.strip()))
+        clean = text.strip()
+        words = clean.split()
+        if len(words) > 4 and not re.search(r"^(?:jarvis,?\s*)?(?:para\s+de\s+falar|cala\s+a\s+boca|pare\s+agora)", clean, re.IGNORECASE):
+            return False
+        return bool(STRICT_STOP_PATTERN.search(clean))
 
     def start_followup_window(self, duration_sec: float = 25.0) -> None:
         """Abre janela de conversa contínua estendida após a fala do JARVIS (25 segundos)."""
@@ -102,10 +110,9 @@ class WakeWordDetector:
                 return True, cleaned
 
         # 4. Reconhecimento de Pergunta ou Diálogo Direto do Mentor
-        # Se o mentor fizer uma pergunta completa (com 'sabe', 'onde', 'qual', etc.), responde sem ignorar
         if len(clean_text.split()) >= 3 and CONVERSATIONAL_INTENT_PATTERN.search(clean_text):
             cleaned = re.sub(r"^[,.:\- ]+|[,.:\- ]+$", "", clean_text).strip()
-            logger.info(f"Pergunta/diálogo detectado: '{cleaned}'. Ativando resposta imediata!")
+            logger.info(f"Pergunta/diálogo direto detectado: '{cleaned}'. Ativando resposta!")
             return True, cleaned
 
         return False, ""

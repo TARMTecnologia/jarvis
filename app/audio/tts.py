@@ -1,14 +1,11 @@
 ﻿"""
 Motor Hibrido de Sintese de Voz (Text-To-Speech) Ultra-Humanizado, Emocional e Exclusivamente Masculino para o JARVIS.
-Suporta:
-- OpenAI Neural TTS (tts-1 / voice onyx/echo com entonacao humana e emocao cinematografica)
-- ElevenLabs Neural TTS (vozes hiper-realistas com prosodia emocional)
-- Edge-TTS Neural Masculino PT-BR (+35% velocidade, alta definicao)
-- SAPI5 Local (100% offline)
+Filtra automaticamente emojis e tags markdown para garantir que a fala nunca soe robotica ou vocalize emojis.
 """
 
 import asyncio
 import io
+import re
 import threading
 import urllib.parse
 import urllib.request
@@ -25,6 +22,31 @@ from app.core.logging_config import get_logger
 logger = get_logger("audio.tts")
 
 DEFAULT_MALE_NEURAL_VOICE = "pt-BR-AntonioNeural"
+
+# Regex universal para remocao de emojis Unicode e simbolos graficos
+EMOJI_PATTERN = re.compile(
+    r"[\U00010000-\U0010ffff"
+    r"\U00002600-\U000027BF"
+    r"\U0001F300-\U0001F64F"
+    r"\U0001F680-\U0001F6FF"
+    r"\U0001F1E0-\U0001F1FF"
+    r"\u200d\ufe0f"
+    r"]+",
+    flags=re.UNICODE
+)
+
+
+def clean_text_for_speech(text: str) -> str:
+    """Remove emojis, tags markdown e caracteres especiais para fala 100% limpa e natural."""
+    if not text:
+        return ""
+    # Remove emojis
+    no_emojis = EMOJI_PATTERN.sub("", text)
+    # Remove formatacoes markdown como **texto**, `codigo`, # Titulo, [link](...)
+    no_markdown = re.sub(r"[*_`#~\[\]\(\)]", "", no_emojis)
+    # Remove espacos extras
+    cleaned = re.sub(r"\s+", " ", no_markdown).strip()
+    return cleaned
 
 
 class LocalTTS:
@@ -70,9 +92,9 @@ class LocalTTS:
 
     def speak(self, text: str, on_start: Optional[Callable[[], None]] = None, on_end: Optional[Callable[[], None]] = None) -> None:
         """
-        Sintetiza e reproduz o texto com voz humana, expressiva e ininterrupta.
+        Sintetiza e reproduz o texto com voz humana, expressiva e sem pronunciar emojis.
         """
-        clean_text = text.strip()
+        clean_text = clean_text_for_speech(text)
         if not clean_text or app_config.system.silent_mode:
             if on_end:
                 on_end()
