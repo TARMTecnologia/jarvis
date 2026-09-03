@@ -1,6 +1,6 @@
 ﻿"""
 Widget de Visualizacao e Controle da Webcam (Os Olhos do JARVIS) para o HUD.
-Renderiza o feed de video ao vivo, reticulo HUD e botoes para registro facial e captura de foto.
+Renderiza o feed de video ao vivo com auto-inicializacao, reticulo HUD e botoes para registro facial e captura de foto.
 """
 
 import time
@@ -27,6 +27,13 @@ class CameraWidget(QWidget):
 
         self._setup_ui()
 
+        # Auto-inicia a camera se habilitada nas configuracoes
+        if getattr(app_config.vision, "enabled", True):
+            success = vision_manager.start_camera()
+            if success:
+                self._is_active = True
+                self.btn_toggle.setText("Desligar Câmera")
+
         # Timer de atualizacao do feed (30 FPS)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_frame)
@@ -49,7 +56,7 @@ class CameraWidget(QWidget):
                 font-size: 12px;
             }
         """)
-        self.video_frame.setText("📷 Câmera Pronta / Modo Econômico")
+        self.video_frame.setText("📷 Inicializando sensores ópticos do JARVIS...")
         layout.addWidget(self.video_frame, stretch=1)
 
         # Barra de Controles
@@ -122,7 +129,7 @@ class CameraWidget(QWidget):
             QTimer.singleShot(2000, lambda: None)
 
     def _update_frame(self) -> None:
-        """Obtém imagem da webcam e renderiza na interface."""
+        """Obtém imagem da webcam e renderiza na interface com HUD ao vivo."""
         if not vision_manager.is_active:
             return
 
