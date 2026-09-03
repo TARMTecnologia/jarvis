@@ -1,4 +1,4 @@
-"""
+﻿"""
 Orquestrador Central do JARVIS.
 Coordena a integracao completa entre Audio, Visao HD (Olhos do JARVIS), Memoria Solida, Identificacao Facial e Vocal do Mentor, Provedor de IA (OpenAI / Nuvem), Ferramentas e Interface.
 Garante execucao ininterrupta de voz, busca em tempo real, humor inteligente e presenca calorosa e humanizada.
@@ -49,13 +49,13 @@ PERSONALIDADE, HUMOR E DIRETRIZES DE DIÁLOGO:
   * Comemore com entusiasmo as vitórias, ideias brilhantes e projetos de {user_name} (ex: "Isso é brilhante, {user_name}!", "Excelente escolha, meu caro!").
   * Seja caloroso, atencioso e parceiro quando ele estiver cansado, pensativo ou sobrecarregado.
   * Mantenha uma postura elegante, leal, confiante e amigável.
-- **Ritmo e Fala Natural**: Fale em português brasileiro impecável, vivo e coloquial quando apropriado. Responda de forma ágil e concisa (1 a 3 frases para respostas faladas cotidianas, aprofundando quando solicitado para análises técnicas).
+- **Ritmo e Fala Natural**: Fale em português brasileiro impecável, vivo e coloquial quando apropriado. Responda de forma ágil e concisa (1 a 3 frases para respostas faladas cotidianas, aprofundando quando solicitado para análises técnicas). NUNCA use emojis no texto falado.
 - **Tratamento**: Trate seu mentor sempre pelo nome (**{user_name}**) ou carinhosamente por 'Senhor'. NUNCA use a palavra genérica 'Usuário'.
 - **Ações no Mundo Real**:
   * Ao responder sobre clima ou temperatura: use `get_weather`.
   * Ao responder sobre notícias, fatos atuais, esportes ou cotações: use `search_web`.
   * Ao ser solicitado para abrir programas, WhatsApp, anotações ou tarefas: use as ferramentas locais correspondentes.
-  * Ao analisar a câmera ou tela: descreva com riqueza de detalhes, identificando pessoas, roupas, objetos segurados nas mãos e o ambiente ao redor.
+  * Ao analisar a câmera ou tela: atue como os olhos humanos do assistente, descrevendo com riqueza de detalhes pessoas, rostos, objetos segurados nas mãos e o ambiente ao redor.
 """
 
 FACE_CALIBRATION_PATTERNS = [
@@ -72,12 +72,17 @@ VOICE_CALIBRATION_PATTERNS = [
 ]
 
 VISUAL_INTENT_PATTERNS = [
+    re.compile(r"\b(?:tem|h[aá])\s+(?:algu[eé]m|uma?\s+pessoa|gente|alguem)\s+(?:na\s+frente|diante|na\s+c[aâ]mera|na\s+web\s*cam|aqui)\b", re.IGNORECASE),
+    re.compile(r"\b(?:tem\s+pessoa|tem\s+gente|tem\s+algu[eé]m|tem\s+alguem)\b", re.IGNORECASE),
+    re.compile(r"\b(?:estou|t[oô])\s+(?:na\s+frente|diante)\s+(?:da\s+c[aâ]mera|da\s+web\s*cam)\b", re.IGNORECASE),
+    re.compile(r"\b(?:voc[eê]\s+)?(?:est[aá]|t[aá])\s+me\s+vendo\b", re.IGNORECASE),
+    re.compile(r"\b(?:quem|quantas\s+pessoas)\s+(?:est[aá]|tem|diante|na\s+frente|comigo)\b", re.IGNORECASE),
+    re.compile(r"\b(?:o\s+que\s+tem|o\s+que\s+mostra|o\s+que\s+est[aá]\s+na|quem\s+est[aá]\s+na)\s+(?:c[aâ]mera|web\s*cam)\b", re.IGNORECASE),
+    re.compile(r"\b(?:analise|descreva|identifique|reconhe[cç]a|veja)\s+(?:o\s+que\s+tem\s+)?(?:na\s+c[aâ]mera|na\s+web\s*cam|meus\s+olhos|na\s+minha\s+frente)\b", re.IGNORECASE),
     re.compile(r"o que (?:voc[eê]\s+)?(?:est[aá]|t[aá]) (?:vendo|enxergando|olhando)", re.IGNORECASE),
     re.compile(r"o que (?:tem|est[aá]) (?:na minha m[aã]o|nas minhas m[aã]os)", re.IGNORECASE),
     re.compile(r"o que (?:eu\s+)?(?:estou|to) (?:segurando|mostrando)", re.IGNORECASE),
     re.compile(r"o que (?:tem|est[aá]) (?:ao meu redor|aqui em volta|no meu ambiente|na minha sala)", re.IGNORECASE),
-    re.compile(r"o que (?:tem|est[aá]|mostra)\s+(?:na\s+)?(?:web\s*cam|c[aâ]mera)", re.IGNORECASE),
-    re.compile(r"(?:quem|quantas)\s+pessoas?\s+(?:est[aá]|tem|comigo|aqui|na\s+c[aâ]mera|diante)", re.IGNORECASE),
     re.compile(r"que objeto [eé] esse", re.IGNORECASE),
     re.compile(r"o que [eé] isso (?:aqui)?", re.IGNORECASE),
     re.compile(r"identifique (?:esse objeto|o que tem aqui|o que estou segurando|o\s+objeto|isso|a\s+pessoa|quem\s+[eé])", re.IGNORECASE),
@@ -262,23 +267,28 @@ class JarvisOrchestrator:
                         if raw_frame is None:
                             raw_frame = camera_capture.capture_frame_sync()
 
-                        if raw_frame is not None:
-                            scene_desc = vision_manager.describe_scene(raw_frame)
-                            cam_bytes = vision_manager.capture_frame_for_ai(force=True)
-                            if cam_bytes:
-                                images_to_send.append(cam_bytes)
-                            is_visual = True
-                            user_label = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Thiago"
-                            visual_context_text = (
-                                f" [OS OLHOS DO JARVIS — WEBCAM HD: Frame de alta resolução capturado da webcam em tempo real. "
-                                f"O mentor cadastrado chama-se {user_label}. Analise a foto minuciosamente: "
-                                f"1) Identifique todas as pessoas diante da câmera — confirme se a pessoa em destaque é {user_label} e se há outras pessoas ao lado; "
-                                f"2) Inspecione com muita atenção as mãos das pessoas e identifique exatamente qualquer objeto segurado (como celular, caneta, copo, chaves, ferramentas, documentos); "
-                                f"3) Descreva roupas, expressões e elementos ao redor no ambiente com clareza, perspicácia e maestria.]"
-                            )
-                        else:
-                            logger.warning("Falha ao obter frame da camera.")
-                            visual_context_text = " [Câmera acionada, mas o sinal de vídeo não pôde ser lido no momento.]"
+                        telemetry = vision_manager.get_live_telemetry()
+                        cam_bytes = vision_manager.capture_frame_for_ai(force=True)
+                        if cam_bytes:
+                            images_to_send.append(cam_bytes)
+                        is_visual = True
+
+                        user_label = app_config.system.user_name if app_config.system.user_name != "Usuário" else "Thiago"
+                        is_present = telemetry.get("is_person_present", True)
+                        people_cnt = telemetry.get("people_count", 1 if is_present else 0)
+                        lighting = telemetry.get("lighting", "Boa iluminação")
+
+                        visual_context_text = (
+                            f" [OS OLHOS DO JARVIS — VISÃO HD EM TEMPO REAL: "
+                            f"Foto de alta resolução capturada instantaneamente pela webcam. "
+                            f"Telemetria dos sensores: Presença humana={is_present} (estimativa de {people_cnt} pessoa(s)), Iluminação={lighting}. "
+                            f"O mentor cadastrado chama-se {user_label}. "
+                            f"Atue com os olhos humanos do JARVIS e analise a cena com maestria e riqueza de detalhes: "
+                            f"1) PRESENÇA DE PESSOAS: Diga de forma clara e segura se há alguém na frente da câmera. Confirme se é {user_label} e se há alguém ao lado; "
+                            f"2) MÃOS E OBJETOS: Inspecione com muita atenção as mãos da pessoa e identifique qualquer objeto segurado (celular, caneta, copo, xícara, chaves, ferramentas, garrafa, papéis) ou indique se as mãos estão livres; "
+                            f"3) ROUPAS, EXPRESSÃO E POSTURA: Descreva roupas, cores, expressão facial e postura; "
+                            f"4) AMBIENTE: Descreva o que está visível ao redor (mesa, monitores, sala, iluminação).]"
+                        )
                         break
 
             # 6. Monta o Prompt de Sistema Enriquecido com Memoria Solida do Mentor
