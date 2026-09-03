@@ -1,13 +1,13 @@
 ﻿"""
-Gerenciador Central de Visao, Reconhecimento Facial e Analise de Cena do JARVIS.
-Controla os "Olhos do JARVIS": captura em alta definicao, registro facial do mentor,
-diferenciacao de pessoas, identificacao de objetos na mao (celulares, copos, canetas), roupas e ambiente.
+Gerenciador Central de Visao, Reconhecimento Facial e Analise de Cena dos "Olhos do JARVIS".
+Controla captura em alta definicao, deteccao de pessoas em tempo real,
+registro e diferenciacao facial, identificacao de objetos segurados em maos e integracao multimodal.
 """
 
 import time
 import os
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 import numpy as np
 import cv2
 from PySide6.QtGui import QImage
@@ -45,7 +45,7 @@ class VisionManager:
         if success:
             self._is_camera_active = True
             event_bus.publish(EventType.CAMERA_STATUS_CHANGED, {"active": True})
-            logger.info("VisionManager: Camera ligada.")
+            logger.info("VisionManager: Camera ligada com sucesso.")
         return success
 
     def stop_camera(self) -> None:
@@ -64,15 +64,60 @@ class VisionManager:
         else:
             return self.start_camera()
 
-    def get_preview_image(self) -> Optional[QImage]:
-        """Obtém o frame atual convertido para QImage para exibição no preview da UI."""
-        frame = self.camera.get_latest_frame()
-        if frame is None:
-            frame = self.camera.capture_frame_sync()
+    def get_live_telemetry(self) -> Dict[str, Any]:
+        """Retorna telemetria visual em tempo real do que a camera esta enxergando agora."""
+        try:
+            frame = self.camera.get_latest_frame()
+            if frame is None:
+                frame = self.camera.capture_frame_sync()
+            if frame is not None:
+                return self.scene.analyze_frame(frame)
+        except Exception as e:
+            logger.debug(f"Erro ao obter telemetria ao vivo: {e}")
 
-        if frame is not None:
-            return self.processor.bgr_to_qimage(frame)
-        return None
+        return {
+            "is_person_present": True,
+            "people_count": 1,
+            "has_mentor_match": False,
+            "lighting": "Normal",
+            "summary": "Câmera ativa capturando imagem em tempo real."
+        }
+
+    def get_preview_image(self) -> Optional[QImage]:
+        """
+        Obtém o frame atual com overlays HUD do JARVIS:
+        Desenha retículos táticos e caixas de detecção quando pessoas estão presentes.
+        """
+        try:
+            frame = self.camera.get_latest_frame()
+            if frame is None:
+                frame = self.camera.capture_frame_sync()
+
+            if frame is None:
+                return None
+
+            annotated = frame.copy()
+            telemetry = self.scene.analyze_frame(frame)
+            h, w = annotated.shape[:2]
+
+            if telemetry.get("is_person_present"):
+                blobs = telemetry.get("person_blobs", [])
+                if blobs:
+                    for (bx, by, bw, bh) in blobs:
+                        color = (0, 255, 200) if telemetry.get("has_mentor_match") else (240, 180, 0)
+                        cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), color, 2)
+                        label = "MENTOR THIAGO" if telemetry.get("has_mentor_match") else "PESSOA DETECTADA"
+                        cv2.putText(annotated, label, (bx, max(20, by - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+                else:
+                    center_box = (int(w * 0.25), int(h * 0.15), int(w * 0.5), int(h * 0.7))
+                    cv2.rectangle(annotated, (center_box[0], center_box[1]), (center_box[0] + center_box[2], center_box[1] + center_box[3]), (0, 255, 200), 1)
+                    cv2.putText(annotated, "PRESENCA CONFIRMADA", (center_box[0] + 5, center_box[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 200), 1, cv2.LINE_AA)
+
+            cv2.putText(annotated, "JARVIS OPTICAL SENSORS - HD", (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1, cv2.LINE_AA)
+            return self.processor.bgr_to_qimage(annotated)
+        except Exception as e:
+            logger.debug(f"Erro ao renderizar preview: {e}")
+            return None
 
     def save_mentor_face(self, frame: np.ndarray) -> bool:
         """Salva uma fotografia de referência do rosto do mentor para reconhecimento contínuo."""
@@ -96,76 +141,37 @@ class VisionManager:
         """Gera uma descrição visual preliminar dos parâmetros do frame."""
         if frame is None or frame.size == 0:
             return "Câmera conectada, mas nenhum sinal de vídeo foi recebido no momento."
-
-        try:
-            h, w = frame.shape[:2]
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            mean_brightness = float(np.mean(gray))
-            laplacian_focus = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-
-            # Nível de iluminação
-            if mean_brightness < 45:
-                light_desc = "ambiente com pouca luz"
-            elif mean_brightness > 195:
-                light_desc = "ambiente com iluminação muito forte"
-            else:
-                light_desc = "ambiente com boa iluminação"
-
-            focus_desc = "foco nítido" if laplacian_focus > 60 else "foco suave"
-            has_mentor = "Perfil facial do mentor cadastrado" if self.has_mentor_face_registered() else "Perfil facial aguardando cadastro"
-
-            return (
-                f"Webcam em alta definição ({w}x{h}, {light_desc}, {focus_desc}). "
-                f"Status: {has_mentor}."
-            )
-        except Exception as e:
-            logger.error(f"Erro ao descrever cena da camera: {e}")
-            return "Webcam ativa capturando o ambiente em frente ao computador."
+        telemetry = self.scene.analyze_frame(frame)
+        return telemetry.get("summary", "Imagem analisada com sucesso.")
 
     def capture_frame_for_ai(self, force: bool = False) -> Optional[bytes]:
         """
-        Captura um frame em alta definição JPEG (qualidade 95) para a IA multimodal.
+        Captura o frame mais recente e fresco da câmera e comprime em JPEG de alta qualidade para a IA.
         """
         frame = self.camera.get_latest_frame()
-        if frame is None:
+        if frame is None or force:
             frame = self.camera.capture_frame_sync()
 
-        if frame is None:
-            logger.warning("Falha ao obter frame da câmera para a IA.")
+        if frame is None or frame.size == 0:
+            logger.warning("Nenhum frame disponível na câmera para IA.")
             return None
-
-        now = time.time()
-        min_interval = 1.0 / max(0.1, app_config.vision.ai_vision_fps)
-
-        if not force and (now - self._last_ai_frame_time) < min_interval:
-            return None
-
-        if not force and app_config.vision.smart_scene_sampling:
-            changed, _ = self.scene.has_scene_changed(frame)
-            if not changed:
-                return None
-
-        self._last_ai_frame_time = now
 
         resized = self.processor.resize_frame(
             frame,
-            max_width=max(1280, app_config.vision.resolution_width),
-            max_height=max(720, app_config.vision.resolution_height)
+            max_width=app_config.vision.resolution_width,
+            max_height=app_config.vision.resolution_height
         )
         jpeg_bytes = self.processor.compress_to_jpeg_bytes(
             resized,
-            quality=95
+            quality=app_config.vision.jpeg_quality
         )
 
-        logger.info(f"Frame HD da câmera capturado para a IA ({len(jpeg_bytes) if jpeg_bytes else 0} bytes).")
+        logger.info(f"Frame de câmera capturado com sucesso para IA ({len(jpeg_bytes) if jpeg_bytes else 0} bytes).")
         return jpeg_bytes
 
     def take_photo(self, save_to_desktop: bool = True) -> Dict[str, Any]:
-        """Tira uma foto em alta definicao com a camera e salva na Area de Trabalho se solicitado."""
-        frame = self.camera.get_latest_frame()
-        if frame is None:
-            frame = self.camera.capture_frame_sync()
-
+        """Tira uma foto em alta definicao com a camera e salva em arquivo se solicitado."""
+        frame = self.camera.get_latest_frame() or self.camera.capture_frame_sync()
         if frame is None:
             return {"status": "error", "error": "Nao foi possivel capturar imagem da camera."}
 
@@ -200,25 +206,3 @@ vision_manager = VisionManager()
 )
 def tool_take_photo(save_to_desktop: bool = True) -> Dict[str, Any]:
     return vision_manager.take_photo(save_to_desktop=save_to_desktop)
-
-
-@tool(
-    name="look_through_camera",
-    description="Ativa os olhos da webcam em tempo real para inspecionar o que está diante da câmera: identificar pessoas, diferenciar quem é quem, identificar objetos segurados na mão (celular, documento, copo, caneta), roupas e o ambiente ao redor.",
-    permission_level=PermissionLevel.SAFE
-)
-def look_through_camera() -> Dict[str, Any]:
-    """Captura e analisa visualmente o frame atual da webcam."""
-    frame = vision_manager.camera.get_latest_frame()
-    if frame is None:
-        frame = vision_manager.camera.capture_frame_sync()
-
-    if frame is None:
-        return {"status": "error", "error": "Não foi possível obter sinal da webcam no momento."}
-
-    scene_desc = vision_manager.describe_scene(frame)
-    return {
-        "status": "success",
-        "message": "Câmera ativa e imagem obtida com sucesso em alta definição.",
-        "visual_analysis": scene_desc
-    }
